@@ -85,15 +85,17 @@ $form.Controls.Add($log)
 $desktopPath = [Environment]::GetFolderPath("Desktop")
 if ([string]::IsNullOrWhiteSpace($desktopPath)) { $desktopPath = [IO.Path]::GetTempPath() }
 $script:sessionLogPath = Join-Path $desktopPath "LocalAssistant-install.log"
+$script:sessionLogInitialized = $false
 
 function Add-Log([string]$text) {
     $log.AppendText($text + [Environment]::NewLine)
     try {
-        [IO.File]::AppendAllText(
-            $script:sessionLogPath,
-            $text + [Environment]::NewLine,
-            (New-Object System.Text.UTF8Encoding($false))
-        )
+        if (-not $script:sessionLogInitialized) {
+            [IO.File]::WriteAllText($script:sessionLogPath, $text + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($true)))
+            $script:sessionLogInitialized = $true
+        } else {
+            [IO.File]::AppendAllText($script:sessionLogPath, $text + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+        }
     } catch {}
 }
 
@@ -179,6 +181,12 @@ $installButton.Add_Click({
         $stdoutPath = Join-Path ([IO.Path]::GetTempPath()) ("local-assistant-install-{0}.out.log" -f $PID)
         $stderrPath = Join-Path ([IO.Path]::GetTempPath()) ("local-assistant-install-{0}.err.log" -f $PID)
         Invoke-WebRequest -Uri $rawInstallerUrl -OutFile $tempScript -UseBasicParsing -ErrorAction Stop
+
+        # Windows PowerShell 5.1 treats UTF-8 without BOM as the system ANSI code page.
+        # Normalize the downloaded script so Cyrillic source remains valid on every Windows host.
+        $downloadedBytes = [IO.File]::ReadAllBytes($tempScript)
+        $downloadedText = [Text.Encoding]::UTF8.GetString($downloadedBytes).TrimStart([char]0xFEFF)
+        [IO.File]::WriteAllText($tempScript, $downloadedText, (New-Object System.Text.UTF8Encoding($true)))
 
         $powershell = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
         if (-not $powershell) { $powershell = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source }
