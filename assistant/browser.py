@@ -9,6 +9,7 @@ from typing import Any
 import uuid
 
 from .config import PROJECT_ROOT
+from .paths import PYTHON_EXE
 from .web_tools import validate_url
 
 
@@ -170,7 +171,7 @@ def main() -> None:
         try:
             BROWSER.call("snapshot")
         except RuntimeError:
-            executable = str(Path(sys.executable).with_name("python.exe")) if sys.platform == "win32" else sys.executable
+            executable = str(PYTHON_EXE)
             subprocess.run([executable, "-m", "playwright", "install", "chromium"], check=True, timeout=300,
                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
             BROWSER.call("snapshot")

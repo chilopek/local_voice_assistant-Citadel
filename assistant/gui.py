@@ -6,14 +6,16 @@ import re
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Any
 
 from .app import SYSTEM_PROMPT, run_turn
-from .config import MODEL, OLLAMA_URL, THINK, VOICE_ENABLED, WORKSPACE
+from .config import MODEL, OLLAMA_URL, PROJECT_ROOT, THINK, VOICE_ENABLED, WORKSPACE
 from .memory import Memory
 from .ollama_client import OllamaClient, OllamaError
 from .voice import VoiceError, VoiceSession
+from .paths import installed_uninstaller
+from .uninstall import begin_uninstall
 
 WAKE_WORD = "цитадель"
 HOTKEY = "Ctrl+Alt+C"
@@ -33,7 +35,8 @@ class AssistantGUI:
         root.configure(bg=BG)
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.client = OllamaClient(OLLAMA_URL, MODEL)
-        self.memory = Memory(Path(__file__).resolve().parents[1] / "data" / "memory.sqlite3")
+        WORKSPACE.mkdir(parents=True, exist_ok=True)
+        self.memory = Memory(PROJECT_ROOT / "data" / "memory.sqlite3")
         self.messages: list[dict[str, Any]] = self._initial_messages()
         self.voice = VoiceSession()
         self.stop_event: threading.Event | None = None
@@ -130,6 +133,9 @@ class AssistantGUI:
         self.listen_button.pack(fill="x", pady=(10, 2))
         ttk.Checkbutton(bottom, text="Озвучивать ответы", variable=self.speak_var).pack(anchor="w")
         self._label(bottom, HOTKEY + "  ·  микрофон", size=9).pack(anchor="w", pady=(2, 0))
+        self.uninstall_button = ttk.Button(bottom, text="Удалить помощника…", command=self._uninstall,
+                                           state="normal" if installed_uninstaller() else "disabled")
+        self.uninstall_button.pack(fill="x", pady=(16, 0))
 
         main = ttk.Frame(self.root, padding=(28, 26, 24, 16))
         main.grid(row=0, column=1, sticky="nsew")
@@ -222,6 +228,7 @@ class AssistantGUI:
         self.entry.configure(state="disabled")
         self.send_button.configure(state="disabled")
         self.new_button.configure(state="disabled")
+        self.uninstall_button.configure(state="disabled")
         self.listen_button.configure(state="normal" if listening else "disabled")
         self.stop_button.configure(state="normal")
         self.status_var.set("Слушаю..." if listening else "Обрабатываю задачу...")
@@ -404,6 +411,18 @@ class AssistantGUI:
         self._welcome()
         self.entry.focus_set()
 
+    def _uninstall(self) -> None:
+        if self.busy or self.closed.is_set():
+            return
+        if not messagebox.askyesno("Удаление Цитадели", "Помощник закроется и запустит штатное удаление.\n\nВ деинсталляторе можно сохранить настройки, историю и файлы.\nОбщие Python, Git и Ollama останутся.\n\nПродолжить?", parent=self.root, default="no"):
+            return
+        try:
+            begin_uninstall()
+        except Exception as error:
+            messagebox.showerror("Не удалось запустить удаление", str(error), parent=self.root)
+            return
+        self.close()
+
     def _append_message(self, speaker: str, text: str, *, system: bool = False) -> None:
         self.transcript.configure(state="normal")
         self.transcript.insert("end", f"{speaker}\n", "speaker")
@@ -451,6 +470,7 @@ class AssistantGUI:
         self.entry.configure(state="normal")
         self.send_button.configure(state="normal")
         self.new_button.configure(state="normal")
+        self.uninstall_button.configure(state="normal" if installed_uninstaller() else "disabled")
         self.listen_button.configure(text="Включить микрофон", state="normal")
         self.stop_button.configure(state="disabled")
         self.status_var.set("Задача остановлена" if cancel.is_set() else

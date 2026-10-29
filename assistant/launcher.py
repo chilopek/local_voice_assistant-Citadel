@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sys
 import traceback
+from .paths import ASSET_ROOT, DATA_ROOT, INSTALL_MANIFEST, IS_BUNDLED, ensure_data_layout
 
 
 def show_failure(details: str, log_path: Path) -> None:
@@ -22,7 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="Open and close the GUI to validate startup")
     args = parser.parse_args(argv)
-    project_root = Path(__file__).resolve().parents[1]
+    ensure_data_layout()
+    project_root = DATA_ROOT
     log_path = project_root / "assistant-launch.log"
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -38,7 +40,19 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Starting: executable=%s version=%s cwd=%s check=%s", sys.executable, sys.version, Path.cwd(), args.check)
     root = None
     callback_failed = False
+    mutex = None
     try:
+        from .config import WORKSPACE
+        WORKSPACE.mkdir(parents=True, exist_ok=True)
+        os.chdir(WORKSPACE)
+        if IS_BUNDLED and sys.platform == "win32" and not args.check:
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.CreateMutexW.restype = ctypes.c_void_p
+            kernel.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+            name = INSTALL_MANIFEST.get("mutex_name", "CitadelLocalAssistant")
+            mutex = kernel.CreateMutexW(None, False, name)
+            if not mutex:
+                raise ctypes.WinError(ctypes.get_last_error())
         from .tk_runtime import configure_tk_paths
 
         logger.info("Tcl/Tk paths: %s", configure_tk_paths())
@@ -57,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
 
         root.report_callback_exception = report_callback_exception
         app = AssistantGUI(root, enable_hotkey=not args.check)
-        icon_path = project_root / "assets" / "citadel.ico"
+        icon_path = ASSET_ROOT / "citadel.ico"
         if icon_path.exists():
             root.iconbitmap(default=str(icon_path))
         if args.check:
@@ -92,6 +106,9 @@ def main(argv: list[str] | None = None) -> int:
                 pass
         logger.removeHandler(handler)
         handler.close()
+        if mutex:
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel.CloseHandle(mutex)
 
 
 if __name__ == "__main__":

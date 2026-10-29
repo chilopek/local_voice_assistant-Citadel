@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> None:
     print("Команды: /help, /voice, /text, /clear, /exit\n")
 
     client = OllamaClient(OLLAMA_URL, MODEL)
-    memory = Memory(Path(__file__).resolve().parents[1] / "data" / "memory.sqlite3")
+    memory = Memory(PROJECT_ROOT / "data" / "memory.sqlite3")
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT + "\n" + memory.prompt_context()}
     ]

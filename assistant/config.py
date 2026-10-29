@@ -3,16 +3,18 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from .paths import DATA_ROOT, IS_BUNDLED, PACKAGE_ROOT
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-WORKSPACE = Path(os.environ.get("ASSISTANT_WORKSPACE", PROJECT_ROOT)).expanduser().resolve()
+PROJECT_ROOT = DATA_ROOT
 OLLAMA_URL = os.environ.get("ASSISTANT_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 LOCAL_CONFIG_PATH = PROJECT_ROOT / "assistant.local.json"
 try:
     LOCAL_CONFIG = json.loads(LOCAL_CONFIG_PATH.read_text(encoding="utf-8-sig"))
 except (FileNotFoundError, json.JSONDecodeError):
     LOCAL_CONFIG = {}
+
+WORKSPACE = Path(os.environ.get("ASSISTANT_WORKSPACE", LOCAL_CONFIG.get("workspace", str(DATA_ROOT / "workspace" if IS_BUNDLED else PACKAGE_ROOT)))).expanduser().resolve()
 
 MODEL = os.environ.get("ASSISTANT_MODEL", LOCAL_CONFIG.get("model", "qwen3:4b-instruct"))
 MAX_STEPS = int(os.environ.get("ASSISTANT_MAX_STEPS", "24"))

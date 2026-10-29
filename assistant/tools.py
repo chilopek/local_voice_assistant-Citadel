@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import WORKSPACE, is_inside_workspace
+from .paths import PYTHON_EXE
 
 
 def _resolve_workspace_path(relative_path: str) -> Path:
@@ -163,7 +164,7 @@ TOOL_SCHEMAS = [
 ]
 
 def run_python(code: str, timeout: int = 60) -> dict:
-    executable = str(Path(sys.executable).with_name("python.exe")) if sys.platform == "win32" else sys.executable
+    executable = str(PYTHON_EXE)
     result = subprocess.run([executable, "-X", "utf8", "-c", code], cwd=WORKSPACE, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=max(1, min(int(timeout), 180)), creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
     return {"return_code": result.returncode, "stdout": result.stdout[-12000:], "stderr": result.stderr[-12000:]}
 
