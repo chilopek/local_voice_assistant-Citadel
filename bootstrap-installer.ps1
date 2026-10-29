@@ -276,7 +276,7 @@ $installButton.Add_Click({
         $script:installStdoutOffset = 0
         $script:installStderrOffset = 0
         $script:installLastOutputAt = [DateTime]::Now
-        $arguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$tempScript`" -RepoUrl `"$repoUrl`" -Mode $mode -Voice $voice -NonInteractive"
+        $arguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$tempScript`" -RepoUrl `"$repoUrl`" -Mode $mode -Voice $voice -Update -NonInteractive"
         $script:installProcess = Start-Process -FilePath $powershell -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
         $installTimer.Start()
     } catch {
