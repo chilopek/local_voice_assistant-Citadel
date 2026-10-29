@@ -117,8 +117,9 @@ $installTimer.Add_Tick({
         $details = if ($stderr) { $stderr.Trim() } elseif ($stdout) { $stdout.Trim() } else { "Процесс завершился с кодом $exitCode." }
         Add-Log ("ОШИБКА: " + $details)
         Add-Log ("Полный лог: " + $script:installStderrPath)
+        $preview = if ($details.Length -gt 1200) { $details.Substring(0, 1200) + "..." } else { $details }
         [System.Windows.Forms.MessageBox]::Show(
-            "Установка завершилась с ошибкой (код $exitCode). Подробности и путь к логу показаны в окне.",
+            "Установка завершилась с ошибкой (код $exitCode).`n`n$preview`n`nПолный лог: $script:installStderrPath",
             "Ошибка",
             "OK",
             "Error"

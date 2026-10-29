@@ -212,9 +212,30 @@ $venvPython = Join-Path $venv "Scripts\python.exe"
 Step "Установка Python-зависимостей"
 & $venvPython -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "Не удалось обновить pip." }
-$packageSpec = if ($voiceEnabled) { "$InstallDir[voice]" } else { $InstallDir }
-& $venvPython -m pip install -e $packageSpec
+$basePackageSpec = $InstallDir
+& $venvPython -m pip install -e $basePackageSpec
 if ($LASTEXITCODE -ne 0) { throw "Не удалось установить зависимости проекта." }
+
+if ($voiceEnabled) {
+    try {
+        Step "Установка голосовых зависимостей"
+        $voicePackageSpec = "$InstallDir[voice]"
+        & $venvPython -m pip install -e $voicePackageSpec
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Голосовые зависимости не установились. Продолжаю без голосового режима."
+            $voiceEnabled = $false
+        }
+    } catch {
+        Write-Warning ("Голосовые зависимости пропущены: " + $_.Exception.Message)
+        $voiceEnabled = $false
+    }
+}
+
+if (-not $voiceEnabled) {
+    $localConfig.voice = $false
+    $localConfig | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallDir "assistant.local.json") -Encoding utf8
+}
+
 & $venvPython -c "from assistant import __version__; print('local-assistant', __version__)"
 if ($LASTEXITCODE -ne 0) { throw "Файлы помощника не прошли проверку импорта." }
 
