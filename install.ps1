@@ -51,12 +51,39 @@ function Install-WingetPackage([string]$id, [string]$label, [switch]$UserScope) 
 
 function Find-Python {
     $py = Find-Executable "py.exe"
-    if ($py) { return @{ Path = $py; Launcher = $true } }
-    $python = Find-Executable "python.exe" @(
+    if ($py) {
+        & $py -3.12 -c "import sys; assert sys.version_info >= (3, 12)" *> $null
+        if ($LASTEXITCODE -eq 0) { return @{ Path = $py; Launcher = $true } }
+    }
+
+    $candidates = @()
+    $pathPython = Find-Executable "python.exe"
+    if ($pathPython) { $candidates += $pathPython }
+    $candidates += @(
         "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe"
+        "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe",
+        "$env:ProgramFiles\Python312\python.exe",
+        "$env:ProgramFiles\Python313\python.exe",
+        "$env:ProgramFiles\Python314\python.exe"
     )
-    if ($python) { return @{ Path = $python; Launcher = $false } }
+    $pythonRoots = @(
+        "$env:LOCALAPPDATA\Programs\Python",
+        "$env:ProgramFiles\Python"
+    )
+    foreach ($root in $pythonRoots) {
+        if (Test-Path -LiteralPath $root) {
+            $candidates += @(Get-ChildItem -LiteralPath $root -Directory -Filter "Python3*" -ErrorAction SilentlyContinue | ForEach-Object {
+                Join-Path $_.FullName "python.exe"
+            })
+        }
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        & $candidate -c "import sys; assert sys.version_info >= (3, 12)" *> $null
+        if ($LASTEXITCODE -eq 0) { return @{ Path = $candidate; Launcher = $false } }
+    }
     return $null
 }
 
