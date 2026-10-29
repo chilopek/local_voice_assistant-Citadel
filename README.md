@@ -29,7 +29,7 @@
 
 ### Вариант 1: EXE-установщик
 
-Скачайте `LocalAssistantSetup.exe` из раздела **Actions → Build Windows installer → Artifacts** или из релиза проекта, запустите файл и выберите режим:
+Скачайте [исправленный `LocalAssistantSetup.exe` из релиза v0.1.1](https://github.com/chilopek/local-assistant/releases/download/v0.1.1/LocalAssistantSetup.exe), запустите файл и выберите режим:
 
 - `auto` — автоматический подбор по характеристикам компьютера;
 - `fast` — минимальная задержка и небольшая модель;
