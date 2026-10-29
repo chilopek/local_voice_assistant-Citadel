@@ -371,8 +371,8 @@ Step "Голосовой режим: $(if ($voiceEnabled) { 'включён' } e
 $localConfig = @{
     model = $selectedModel
     think = $false
-    num_predict = 192
-    num_ctx = 4096
+    num_predict = 768
+    num_ctx = 8192
     voice = $voiceEnabled
     stt_model = $sttModel
     tts_model = "v5_6_ru"
@@ -389,6 +389,12 @@ Step "Установка Python-зависимостей"
 Invoke-CheckedCommand $venvPython @("-m", "pip", "install", "--upgrade", "pip")
 $basePackageSpec = $InstallDir
 Invoke-CheckedCommand $venvPython @("-m", "pip", "install", "-e", $basePackageSpec)
+
+Step "Подготовка браузера агента"
+Push-Location -LiteralPath $InstallDir
+try {
+    Invoke-CheckedCommand $venvPython @("-m", "assistant.browser")
+} finally { Pop-Location }
 
 if ($voiceEnabled) {
     try {

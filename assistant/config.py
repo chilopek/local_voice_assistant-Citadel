@@ -15,15 +15,15 @@ except (FileNotFoundError, json.JSONDecodeError):
     LOCAL_CONFIG = {}
 
 MODEL = os.environ.get("ASSISTANT_MODEL", LOCAL_CONFIG.get("model", "qwen3:4b-instruct"))
-MAX_STEPS = int(os.environ.get("ASSISTANT_MAX_STEPS", "8"))
+MAX_STEPS = int(os.environ.get("ASSISTANT_MAX_STEPS", "24"))
 _think_override = os.environ.get("ASSISTANT_THINK")
 THINK = (
     _think_override.strip().lower() in {"1", "true", "yes", "да"}
     if _think_override is not None
     else bool(LOCAL_CONFIG.get("think", "instruct" not in MODEL.lower()))
 )
-NUM_PREDICT = int(os.environ.get("ASSISTANT_NUM_PREDICT", str(LOCAL_CONFIG.get("num_predict", 512 if THINK else 192))))
-NUM_CTX = int(os.environ.get("ASSISTANT_NUM_CTX", str(LOCAL_CONFIG.get("num_ctx", 4096))))
+NUM_PREDICT = max(512, int(os.environ.get("ASSISTANT_NUM_PREDICT", str(LOCAL_CONFIG.get("num_predict", 768)))))
+NUM_CTX = max(8192, int(os.environ.get("ASSISTANT_NUM_CTX", str(LOCAL_CONFIG.get("num_ctx", 8192)))))
 VOICE_ENABLED = bool(
     os.environ.get("ASSISTANT_VOICE", str(LOCAL_CONFIG.get("voice", False))).strip().lower()
     in {"1", "true", "yes", "да", "on"}

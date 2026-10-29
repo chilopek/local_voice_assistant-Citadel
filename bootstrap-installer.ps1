@@ -118,6 +118,7 @@ function Update-ProgressFromText([string]$text) {
         @{ Marker = "Выбор модели"; Value = 25; Label = "Подготовка конфигурации" },
         @{ Marker = "Создание виртуального окружения"; Value = 38; Label = "Подготовка Python" },
         @{ Marker = "Установка Python-зависимостей"; Value = 52; Label = "Установка зависимостей" },
+        @{ Marker = "Подготовка браузера агента"; Value = 60; Label = "Подготовка браузера агента" },
         @{ Marker = "Установка голосовых зависимостей"; Value = 68; Label = "Установка голосового режима" },
         @{ Marker = "Запуск локального сервиса Ollama"; Value = 76; Label = "Запуск Ollama" },
         @{ Marker = "Загрузка модели"; Value = 86; Label = "Загрузка модели" },

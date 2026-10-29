@@ -20,7 +20,11 @@ try {
         $ErrorActionPreference = "Continue"
         if ($Console) { & $python -m assistant }
         elseif ($Check) { & $python -m assistant.launcher --check }
-        else { & $python -m assistant.launcher }
+        else {
+            $windowed = Join-Path $projectRoot '.venv\Scripts\pythonw.exe'
+            Start-Process -FilePath $windowed -ArgumentList '-m assistant.launcher' -WorkingDirectory $projectRoot
+            exit 0
+        }
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $savedPreference

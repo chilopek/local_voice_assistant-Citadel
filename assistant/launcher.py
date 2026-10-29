@@ -80,6 +80,11 @@ def main(argv: list[str] | None = None) -> int:
             show_failure(details, log_path)
         return 1
     finally:
+        try:
+            from .browser import BROWSER
+            BROWSER.close()
+        except Exception:
+            logger.exception("Browser cleanup failed")
         if root is not None:
             try:
                 root.destroy()

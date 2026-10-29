@@ -4,9 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-assistant"
-version = "0.1.0"
+version = "0.2.0"
 description = "Локальное ядро персонального голосового помощника"
 requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.12,<5",
+    "ddgs>=9.16,<10",
+    "playwright>=1.58,<2",
+    "pywinauto>=0.6.9,<0.7; sys_platform == 'win32'",
+    "Pillow>=10,<13; sys_platform == 'win32'",
+]
 
 [project.optional-dependencies]
 voice = [

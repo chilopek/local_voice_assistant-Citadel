@@ -43,6 +43,11 @@ jobs:
         shell: powershell
         run: .\tests\test-installer.ps1
 
+      - name: Test real browser workflow
+        if: matrix.python == '3.12'
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe tests/browser_smoke.py
+
       - name: Build EXE
         shell: pwsh
         run: .\build-installer.ps1
