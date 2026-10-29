@@ -11,6 +11,9 @@ param(
     [ValidateSet("auto", "fast", "balanced", "power")]
     [string]$Mode = "auto",
 
+    [ValidateSet("auto", "on", "off")]
+    [string]$Voice = "auto",
+
     [switch]$Fast,
     [switch]$Update,
     [switch]$NoShortcut,
@@ -109,6 +112,17 @@ function Select-Model {
     }
 }
 
+function Select-Voice {
+    if ($Voice -eq "on") { return $true }
+    if ($Voice -eq "off") { return $false }
+    if ($NonInteractive) { return $true }
+
+    Write-Host "`nВключить голосовой режим?" -ForegroundColor Yellow
+    Write-Host "Голосовые зависимости добавят несколько сотен мегабайт и скачают модели при первом запуске."
+    $choice = Read-Host "Включить голос [Y/n]"
+    return [string]::IsNullOrWhiteSpace($choice) -or $choice.Trim().ToLowerInvariant() -in @("y", "yes", "д", "да")
+}
+
 function Wait-Ollama([string]$ollamaPath) {
     $healthy = $false
     try { Invoke-RestMethod "http://127.0.0.1:11434/api/tags" -TimeoutSec 3 | Out-Null; $healthy = $true } catch {}
@@ -170,12 +184,20 @@ if (Test-Path -LiteralPath $InstallDir) {
 
 $selectedModel = Select-Model
 Step "Выбор модели: $selectedModel"
+$voiceEnabled = Select-Voice
+$sttModel = if ($Mode -eq "fast" -or $selectedModel -eq "qwen3:1.7b-instruct") { "base" } else { "small" }
+Step "Голосовой режим: $(if ($voiceEnabled) { 'включён' } else { 'выключен' })"
 
 $localConfig = @{
     model = $selectedModel
     think = $false
     num_predict = 192
     num_ctx = 4096
+    voice = $voiceEnabled
+    stt_model = $sttModel
+    tts_model = "v5_6_ru"
+    tts_speaker = "aidar"
+    voice_threads = 4
 }
 $localConfig | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallDir "assistant.local.json") -Encoding utf8
 
@@ -187,6 +209,12 @@ if (-not (Test-Path -LiteralPath (Join-Path $venv "Scripts\python.exe"))) {
     if ($LASTEXITCODE -ne 0) { throw "Не удалось создать виртуальное окружение Python." }
 }
 $venvPython = Join-Path $venv "Scripts\python.exe"
+Step "Установка Python-зависимостей"
+& $venvPython -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "Не удалось обновить pip." }
+$packageSpec = if ($voiceEnabled) { "$InstallDir[voice]" } else { $InstallDir }
+& $venvPython -m pip install -e $packageSpec
+if ($LASTEXITCODE -ne 0) { throw "Не удалось установить зависимости проекта." }
 & $venvPython -c "from assistant import __version__; print('local-assistant', __version__)"
 if ($LASTEXITCODE -ne 0) { throw "Файлы помощника не прошли проверку импорта." }
 
@@ -217,4 +245,5 @@ if (-not $NoShortcut) {
 Step "Установка завершена"
 Write-Host "Каталог: $InstallDir" -ForegroundColor Green
 Write-Host "Модель: $selectedModel" -ForegroundColor Green
+Write-Host "Голос: $(if ($voiceEnabled) { 'включён' } else { 'выключен' })" -ForegroundColor Green
 Write-Host "Запуск: $InstallDir\scripts\run.ps1" -ForegroundColor Green

@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import argparse
 import sys
 from pathlib import Path
 from typing import Any
 
-from .config import MAX_STEPS, MODEL, OLLAMA_URL, THINK, WORKSPACE
+from .config import MAX_STEPS, MODEL, OLLAMA_URL, THINK, VOICE_ENABLED, WORKSPACE
 from .memory import Memory
 from .ollama_client import OllamaClient, OllamaError
 from .tools import CONFIRMATION_REQUIRED, TOOL_SCHEMAS, execute, format_tool_result
+from .voice import VoiceError, VoiceSession
 
 
 SYSTEM_PROMPT = """Ты — локальный персональный помощник пользователя. Отвечай по-русски, кратко и по делу.
@@ -75,12 +77,20 @@ def run_turn(client: OllamaClient, memory: Memory, messages: list[dict[str, Any]
     return "Я остановил цепочку: превышено максимальное число шагов."
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Локальный помощник")
+    parser.add_argument("--voice", action="store_true", help="запустить push-to-talk режим")
+    parser.add_argument("--text", action="store_true", help="запустить текстовый режим")
+    args = parser.parse_args(argv)
+
+    voice_mode = args.voice or (VOICE_ENABLED and not args.text)
+    voice = VoiceSession() if voice_mode else None
     print("Локальный помощник v0.1")
     print(f"Модель: {MODEL}")
     print(f"Thinking: {'включён' if THINK else 'выключен для скорости'}")
     print(f"Рабочая папка: {WORKSPACE}")
-    print("Команды: /help, /clear, /exit\n")
+    print("Режим: голосовой push-to-talk" if voice_mode else "Режим: текстовый")
+    print("Команды: /help, /voice, /text, /clear, /exit\n")
 
     client = OllamaClient(OLLAMA_URL, MODEL)
     memory = Memory(Path(__file__).resolve().parents[1] / "data" / "memory.sqlite3")
@@ -90,24 +100,52 @@ def main() -> None:
 
     while True:
         try:
-            user_text = input("Ты: ").strip()
+            if voice_mode:
+                if voice is None:
+                    voice = VoiceSession()
+                user_text = voice.record()
+                if not user_text:
+                    continue
+                print(f"Ты: {user_text}")
+            else:
+                user_text = input("Ты: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nДо встречи.")
             return
+        except VoiceError as error:
+            print(f"Голосовой режим недоступен: {error}")
+            print("Переключаюсь в текстовый режим.\n")
+            voice_mode = False
+            continue
         if not user_text:
             continue
         if user_text in {"/exit", "/quit", "выход"}:
             print("До встречи.")
             return
+        if user_text in {"/voice", "голосовой режим", "включи голос"}:
+            voice_mode = True
+            voice = voice or VoiceSession()
+            print("Голосовой режим включён.")
+            continue
+        if user_text in {"/text", "текстовый режим", "выключи голос"}:
+            voice_mode = False
+            print("Текстовый режим включён.")
+            continue
         if user_text == "/clear":
             messages = [{"role": "system", "content": SYSTEM_PROMPT + "\n" + memory.prompt_context()}]
             print("Контекст диалога очищен.")
             continue
         if user_text == "/help":
+            print("Команды: /voice, /text, /clear, /exit.")
             print("Например: 'покажи файлы в текущей папке' или 'создай файл notes.txt'.")
             continue
         try:
-            print("Помощник: " + run_turn(client, memory, messages, user_text))
+            answer = run_turn(client, memory, messages, user_text)
+            print("Помощник: " + answer)
+            if voice_mode and voice is not None:
+                voice.speak(answer)
+        except VoiceError as error:
+            print(f"Ошибка голосового вывода: {error}")
         except OllamaError as error:
             print(f"Ошибка подключения: {error}")
         except Exception as error:

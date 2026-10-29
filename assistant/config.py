@@ -24,6 +24,17 @@ THINK = (
 )
 NUM_PREDICT = int(os.environ.get("ASSISTANT_NUM_PREDICT", str(LOCAL_CONFIG.get("num_predict", 512 if THINK else 192))))
 NUM_CTX = int(os.environ.get("ASSISTANT_NUM_CTX", str(LOCAL_CONFIG.get("num_ctx", 4096))))
+VOICE_ENABLED = bool(
+    os.environ.get("ASSISTANT_VOICE", str(LOCAL_CONFIG.get("voice", False))).strip().lower()
+    in {"1", "true", "yes", "да", "on"}
+)
+VOICE_STT_MODEL = os.environ.get("ASSISTANT_STT_MODEL", LOCAL_CONFIG.get("stt_model", "base"))
+VOICE_TTS_MODEL = os.environ.get("ASSISTANT_TTS_MODEL", LOCAL_CONFIG.get("tts_model", "v5_6_ru"))
+VOICE_TTS_SPEAKER = os.environ.get("ASSISTANT_TTS_SPEAKER", LOCAL_CONFIG.get("tts_speaker", "aidar"))
+VOICE_SAMPLE_RATE = int(os.environ.get("ASSISTANT_VOICE_SAMPLE_RATE", str(LOCAL_CONFIG.get("voice_sample_rate", 16000))))
+VOICE_TTS_SAMPLE_RATE = int(os.environ.get("ASSISTANT_TTS_SAMPLE_RATE", str(LOCAL_CONFIG.get("tts_sample_rate", 48000))))
+VOICE_INPUT_DEVICE = os.environ.get("ASSISTANT_INPUT_DEVICE", LOCAL_CONFIG.get("input_device", ""))
+VOICE_THREADS = int(os.environ.get("ASSISTANT_VOICE_THREADS", str(LOCAL_CONFIG.get("voice_threads", 4))))
 
 
 def is_inside_workspace(path: Path) -> bool:

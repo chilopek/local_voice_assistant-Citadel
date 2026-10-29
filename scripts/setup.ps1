@@ -1,3 +1,7 @@
+param(
+    [switch]$NoVoice
+)
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -14,6 +18,13 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
 
 Write-Host "Проверка Python:" -ForegroundColor Cyan
 & .venv\Scripts\python.exe --version
+
+Write-Host "Установка Python-зависимостей проекта..." -ForegroundColor Cyan
+& .venv\Scripts\python.exe -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "Не удалось обновить pip." }
+$packageSpec = if ($NoVoice) { $projectRoot } else { "$projectRoot[voice]" }
+& .venv\Scripts\python.exe -m pip install -e $packageSpec
+if ($LASTEXITCODE -ne 0) { throw "Не удалось установить зависимости проекта." }
 
 function Find-Ollama {
     $fromPath = Get-Command ollama -ErrorAction SilentlyContinue
