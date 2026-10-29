@@ -57,7 +57,12 @@ try {
     $script:runtimeProbe = $badProbe
     if (Test-PythonRuntime $Python) { throw 'Python with failing Tcl was accepted' }
     $script:runtimeProbe = Join-Path $projectRoot 'assistant\tk_runtime.py'
-    # An incomplete old venv must be backed up, then replaced by a working venv.
+    # Existing python.exe can point to an uninstalled/broken base interpreter.
+    New-Item -ItemType Directory -Path (Join-Path $testInstall '.venv\Scripts') -Force | Out-Null
+    Copy-Item -LiteralPath $Python -Destination (Join-Path $testInstall '.venv\Scripts\python.exe')
+    [IO.File]::WriteAllText((Join-Path $testInstall '.venv\pyvenv.cfg'), "home = C:\missing-assistant-python-runtime`n")
+    if (Test-PythonRuntime (Join-Path $testInstall '.venv\Scripts\python.exe')) { throw 'Broken venv was accepted' }
+    # The failed venv must be backed up, then replaced by a working venv.
     [IO.File]::WriteAllText((Join-Path $testInstall '.venv\old-marker.txt'), 'preserve me')
     $newVenv = Ensure-PythonEnvironment $testInstall @{ Path = $Python; Launcher = $false }
     if (-not (Test-PythonRuntime (Join-Path $newVenv 'Scripts\python.exe'))) { throw 'Venv repair failed' }
