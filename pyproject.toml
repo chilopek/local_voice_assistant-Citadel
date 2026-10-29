@@ -12,6 +12,7 @@ requires-python = ">=3.12"
 voice = [
     "faster-whisper>=1.2.1,<2",
     "numpy>=1.26",
+    "pynput>=1.7.7,<2",
     "silero>=0.5.5,<1",
     "sounddevice>=0.5.6,<1",
     "torch>=2.2,<3",

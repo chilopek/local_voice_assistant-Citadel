@@ -1,3 +1,7 @@
+param(
+    [switch]$Console
+)
+
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot
@@ -8,4 +12,5 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
 }
 
 $env:ASSISTANT_WORKSPACE = $projectRoot
-& .venv\Scripts\python.exe -m assistant
+$module = if ($Console) { "assistant" } else { "assistant.gui" }
+& .venv\Scripts\python.exe -m $module

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import queue
 import re
+import threading
 import tempfile
+import time
 import wave
 from pathlib import Path
 from typing import Any
@@ -76,8 +78,28 @@ class VoiceSession:
             output.setframerate(VOICE_SAMPLE_RATE)
             output.writeframes(raw_audio)
 
-    def record(self) -> str | None:
-        """Записывает одну фразу. Повторное нажатие Enter останавливает запись."""
+    @staticmethod
+    def _audio_level(raw_audio: bytes) -> float:
+        try:
+            import numpy as np
+
+            samples = np.frombuffer(raw_audio, dtype=np.int16)
+            if samples.size == 0:
+                return 0.0
+            return float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+        except Exception:
+            return 0.0
+
+    def _capture_raw(
+        self,
+        stop_event: threading.Event,
+        *,
+        wait_for_speech: bool,
+        max_seconds: float,
+        start_timeout: float = 10.0,
+        silence_seconds: float = 0.85,
+    ) -> bytes:
+        """Захватывает PCM-16 mono из микрофона до остановки или тишины."""
         try:
             import sounddevice as sd
         except Exception as error:
@@ -85,16 +107,18 @@ class VoiceSession:
                 "Не найден sounddevice. Установите голосовые зависимости через scripts/setup.ps1."
             ) from error
 
-        command = input("Нажмите Enter, скажите команду и нажмите Enter ещё раз (или /text): ").strip()
-        if command:
-            return command
-
         chunks: queue.Queue[bytes] = queue.Queue()
 
         def callback(indata: bytes, frames: int, time: Any, status: Any) -> None:
             if status:
                 print(f"[микрофон: {status}]", flush=True)
             chunks.put(bytes(indata))
+
+        collected: list[bytes] = []
+        started_at = time.monotonic()
+        speech_started_at: float | None = None
+        silence_started_at: float | None = None
+        threshold = 550.0
 
         try:
             with sd.RawInputStream(
@@ -105,17 +129,37 @@ class VoiceSession:
                 device=VOICE_INPUT_DEVICE or None,
                 callback=callback,
             ):
-                print("Слушаю...", flush=True)
-                input()
+                while not stop_event.is_set():
+                    elapsed = time.monotonic() - started_at
+                    if elapsed >= max_seconds:
+                        break
+                    try:
+                        chunk = chunks.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+                    collected.append(chunk)
+                    level = self._audio_level(chunk)
+                    now = time.monotonic()
+                    if level >= threshold:
+                        speech_started_at = speech_started_at or now
+                        silence_started_at = None
+                    elif speech_started_at is not None:
+                        silence_started_at = silence_started_at or now
+                        if wait_for_speech and now - silence_started_at >= silence_seconds:
+                            break
+                    elif wait_for_speech and elapsed >= start_timeout:
+                        break
+                    elif not wait_for_speech and elapsed >= max_seconds:
+                        break
         except Exception as error:
             raise VoiceError(f"Не удалось открыть микрофон: {error}") from error
 
-        collected: list[bytes] = []
         while not chunks.empty():
             collected.append(chunks.get_nowait())
-        raw_audio = b"".join(collected)
+        return b"".join(collected)
+
+    def transcribe_audio(self, raw_audio: bytes) -> str | None:
         if not raw_audio:
-            print("Не удалось получить звук с микрофона.")
             return None
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temporary:
@@ -133,6 +177,48 @@ class VoiceSession:
             return text or None
         finally:
             audio_path.unlink(missing_ok=True)
+
+    def capture_until_stop(self, stop_event: threading.Event, max_seconds: float = 30.0) -> str | None:
+        raw_audio = self._capture_raw(
+            stop_event,
+            wait_for_speech=False,
+            max_seconds=max_seconds,
+        )
+        return self.transcribe_audio(raw_audio)
+
+    def capture_utterance(self, stop_event: threading.Event, max_seconds: float = 18.0) -> str | None:
+        raw_audio = self._capture_raw(
+            stop_event,
+            wait_for_speech=True,
+            max_seconds=max_seconds,
+        )
+        return self.transcribe_audio(raw_audio)
+
+    def record(self) -> str | None:
+        """Записывает одну фразу. Повторное нажатие Enter останавливает запись."""
+        command = input("Нажмите Enter, скажите команду и нажмите Enter ещё раз (или /text): ").strip()
+        if command:
+            return command
+        stop_event = threading.Event()
+        print("Слушаю...", flush=True)
+        captured: dict[str, bytes] = {}
+
+        def capture() -> None:
+            captured["audio"] = self._capture_raw(
+                stop_event,
+                wait_for_speech=False,
+                max_seconds=30.0,
+            )
+
+        recorder = threading.Thread(target=capture, daemon=True)
+        recorder.start()
+        try:
+            input()
+        finally:
+            stop_event.set()
+            recorder.join(timeout=2.0)
+        raw_audio = captured.get("audio", b"")
+        return self.transcribe_audio(raw_audio)
 
     @staticmethod
     def _speech_text(text: str) -> str:

@@ -53,7 +53,13 @@ def _clean_answer(content: str) -> str:
     return content.strip()
 
 
-def run_turn(client: OllamaClient, memory: Memory, messages: list[dict[str, Any]], user_text: str) -> str:
+def run_turn(
+    client: OllamaClient,
+    memory: Memory,
+    messages: list[dict[str, Any]],
+    user_text: str,
+    confirm: Any = _ask_confirmation,
+) -> str:
     messages.append({"role": "user", "content": user_text})
     for _ in range(MAX_STEPS):
         response = client.chat(messages, TOOL_SCHEMAS)
@@ -66,7 +72,7 @@ def run_turn(client: OllamaClient, memory: Memory, messages: list[dict[str, Any]
         for call in calls:
             name = call["name"]
             arguments = call["arguments"]
-            if name in CONFIRMATION_REQUIRED and not _ask_confirmation(name, arguments):
+            if name in CONFIRMATION_REQUIRED and not confirm(name, arguments):
                 result = {"ok": False, "cancelled": True, "message": "Пользователь отменил действие."}
             else:
                 try:
