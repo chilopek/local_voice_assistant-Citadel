@@ -31,6 +31,11 @@ class StartupTests(unittest.TestCase):
         result = self.launch(ASSISTANT_VOICE="on")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_bad_inherited_tcl_paths_are_repaired(self) -> None:
+        result = self.launch(TCL_LIBRARY="C:/missing-tcl/init", TK_LIBRARY="C:/missing-tk/init")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("GUI startup check OK", result.stdout)
+
     def test_import_failure_is_reported_and_logged(self) -> None:
         result = self.launch(ASSISTANT_MAX_STEPS="invalid-regression-test")
         self.assertEqual(result.returncode, 1)

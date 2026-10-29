@@ -14,6 +14,9 @@ function Import-Function([string]$file, [string]$name) {
 }
 
 . (Import-Function (Join-Path $projectRoot 'install.ps1') 'Invoke-CheckedCommand')
+. (Import-Function (Join-Path $projectRoot 'install.ps1') 'Step')
+. (Import-Function (Join-Path $projectRoot 'install.ps1') 'Test-PythonRuntime')
+. (Import-Function (Join-Path $projectRoot 'install.ps1') 'Ensure-PythonEnvironment')
 . (Import-Function (Join-Path $projectRoot 'bootstrap-installer.ps1') 'Read-InstallerText')
 . (Import-Function (Join-Path $projectRoot 'bootstrap-installer.ps1') 'Read-NewInstallerText')
 . (Import-Function (Join-Path $projectRoot 'bootstrap-installer.ps1') 'Start-InstallerProcess')
@@ -43,6 +46,31 @@ try { Invoke-CheckedCommand $Python @('-c', "import sys; print('intentional fail
 catch { $failed = $_.ToString().Contains('17') -and $_.ToString().Contains('intentional failure') }
 if (-not $failed) { throw 'Native command failure was not preserved' }
 
+$script:runtimeProbe = Join-Path $projectRoot 'assistant\tk_runtime.py'
+if (-not (Test-PythonRuntime $Python)) { throw 'Healthy Python/Tcl runtime rejected' }
+$testInstall = Join-Path ([IO.Path]::GetTempPath()) ('assistant-recovery-test-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path (Join-Path $testInstall '.venv') -Force | Out-Null
+try {
+    # A working python.exe with broken Tcl must be rejected by the actual probe.
+    $badProbe = Join-Path $testInstall 'missing-tcl.py'
+    [IO.File]::WriteAllText($badProbe, "import tkinter; raise tkinter.TclError('missing init.tcl')")
+    $script:runtimeProbe = $badProbe
+    if (Test-PythonRuntime $Python) { throw 'Python with failing Tcl was accepted' }
+    $script:runtimeProbe = Join-Path $projectRoot 'assistant\tk_runtime.py'
+    # An incomplete old venv must be backed up, then replaced by a working venv.
+    [IO.File]::WriteAllText((Join-Path $testInstall '.venv\old-marker.txt'), 'preserve me')
+    $newVenv = Ensure-PythonEnvironment $testInstall @{ Path = $Python; Launcher = $false }
+    if (-not (Test-PythonRuntime (Join-Path $newVenv 'Scripts\python.exe'))) { throw 'Venv repair failed' }
+    $backups = @(Get-ChildItem -LiteralPath $testInstall -Directory -Filter '.venv-backup-*')
+    if ($backups.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $backups[0].FullName 'old-marker.txt'))) { throw 'Previous venv was not preserved' }
+} finally {
+    $resolvedTest = [IO.Path]::GetFullPath($testInstall)
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+    if ((Split-Path $resolvedTest -Parent) -eq $tempRoot -and (Split-Path $resolvedTest -Leaf) -like 'assistant-recovery-test-*') {
+        Remove-Item -LiteralPath $resolvedTest -Recurse -Force
+    }
+}
+
 # Read live output while a writer still holds it open, without losing or repeating text.
 $testLog = Join-Path ([IO.Path]::GetTempPath()) ('assistant-log-test-' + [guid]::NewGuid() + '.txt')
 $writer = [IO.File]::Open($testLog, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
@@ -69,5 +97,5 @@ foreach ($file in @('scripts\run.ps1', 'install.ps1', 'bootstrap-installer.ps1',
     [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $projectRoot $file), [ref]$tokens, [ref]$errors) | Out-Null
     if ($errors.Count) { throw "Parse error in $file : $($errors | Out-String)" }
 }
-Write-Host 'PASS: background exit codes (0/17), native stderr, live logs, Windows PowerShell parser'
+Write-Host 'PASS: Tcl runtime probe, venv recovery, exit codes, native stderr, live logs, Windows PowerShell parser'
 exit 0

@@ -98,6 +98,9 @@ function Install-PythonFallback {
         "InstallAllUsers=0",
         "PrependPath=0",
         "Include_launcher=1",
+        "InstallLauncherAllUsers=0",
+        "Include_tcltk=1",
+        "Include_pip=1",
         "Include_test=0",
         "SimpleInstall=1"
     ) -Wait -PassThru
@@ -110,10 +113,11 @@ function Test-PythonRuntime([string]$path, [switch]$Launcher, [string]$LauncherV
     $savedErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
+        $PSNativeCommandUseErrorActionPreference = $false
         if ($Launcher) {
-            & $path "-$LauncherVersion" -c "import sys; assert sys.version_info >= (3, 12)" 1>$null 2>$null
+            & $path "-$LauncherVersion" -I $script:runtimeProbe 1>$null 2>$null
         } else {
-            & $path -c "import sys; assert sys.version_info >= (3, 12)" 1>$null 2>$null
+            & $path -I $script:runtimeProbe 1>$null 2>$null
         }
         return $LASTEXITCODE -eq 0
     } catch {
@@ -161,6 +165,31 @@ function Find-Python {
         if (Test-PythonRuntime $candidate) { return @{ Path = $candidate; Launcher = $false } }
     }
     return $null
+}
+
+function Ensure-PythonEnvironment([string]$installationPath, [hashtable]$runtime) {
+    $venvPath = Join-Path $installationPath ".venv"
+    $existingPython = Join-Path $venvPath "Scripts\python.exe"
+    if ((Test-Path -LiteralPath $venvPath) -and (-not (Test-Path -LiteralPath $existingPython) -or -not (Test-PythonRuntime $existingPython))) {
+        Step "Восстановление повреждённого окружения Python"
+        $expectedVenv = [IO.Path]::GetFullPath((Join-Path $installationPath ".venv"))
+        $item = Get-Item -LiteralPath $venvPath -Force
+        if ($item.FullName -ne $expectedVenv -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "Нельзя автоматически перенести нестандартный путь окружения: $venvPath"
+        }
+        $backup = Join-Path $installationPath (".venv-backup-" + [guid]::NewGuid().ToString("N"))
+        Move-Item -LiteralPath $item.FullName -Destination $backup
+        Write-Host "Предыдущее окружение сохранено: $backup"
+    }
+    if (-not (Test-Path -LiteralPath $existingPython)) {
+        $venvArguments = @("-m", "venv", $venvPath)
+        if ($runtime.Launcher) { $venvArguments = @("-$($runtime.LauncherVersion)") + $venvArguments }
+        Invoke-CheckedCommand $runtime.Path $venvArguments
+    }
+    if (-not (Test-PythonRuntime $existingPython)) {
+        throw "Новое окружение не прошло проверку Tcl/Tk: $existingPython"
+    }
+    return $venvPath
 }
 
 function Find-Ollama {
@@ -275,18 +304,6 @@ if (-not $git) {
     $git = Find-Executable "git.exe" @("$env:ProgramFiles\Git\cmd\git.exe", "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe")
 }
 
-$python = Find-Python
-if (-not $python) {
-    try {
-        Install-WingetPackage "Python.Python.3.12" "Python 3.12" -UserScope
-    } catch {
-        Write-Warning "Python через winget не установлен, использую официальный fallback: $($_.Exception.Message)"
-        Install-PythonFallback
-    }
-    $python = Find-Python
-}
-if (-not $python) { throw "Совместимый Python 3.12 или новее не найден." }
-
 $ollama = Find-Ollama
 if (-not $ollama) {
     Install-WingetPackage "Ollama.Ollama" "Ollama"
@@ -325,6 +342,26 @@ if (Test-Path -LiteralPath $InstallDir) {
     }
 }
 
+$script:runtimeProbe = Join-Path $InstallDir "assistant\tk_runtime.py"
+if (-not (Test-Path -LiteralPath $script:runtimeProbe)) {
+    throw "Не найден тест Python/Tcl. Обновите файлы проекта и повторите установку."
+}
+Step "Проверка Python и Tcl/Tk"
+$python = Find-Python
+if (-not $python) {
+    try {
+        Install-WingetPackage "Python.Python.3.12" "Python 3.12" -UserScope
+    } catch {
+        Write-Warning "Python через winget не подготовлен: $($_.Exception.Message)"
+    }
+    $python = Find-Python
+    if (-not $python) {
+        Install-PythonFallback
+        $python = Find-Python
+    }
+}
+if (-not $python) { throw "Не найден рабочий 64-битный Python 3.12+ с Tcl/Tk. Проверка создания окна не пройдена." }
+
 $selectedModel = Select-Model
 Step "Выбор модели: $selectedModel"
 $voiceEnabled = Select-Voice
@@ -346,11 +383,7 @@ $localConfig | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallDir 
 
 Step "Создание виртуального окружения Python"
 $venv = Join-Path $InstallDir ".venv"
-if (-not (Test-Path -LiteralPath (Join-Path $venv "Scripts\python.exe"))) {
-    $venvArguments = @("-m", "venv", $venv)
-    if ($python.Launcher) { $venvArguments = @("-$($python.LauncherVersion)") + $venvArguments }
-    Invoke-CheckedCommand $python.Path $venvArguments
-}
+$venv = Ensure-PythonEnvironment $InstallDir $python
 $venvPython = Join-Path $venv "Scripts\python.exe"
 Step "Установка Python-зависимостей"
 Invoke-CheckedCommand $venvPython @("-m", "pip", "install", "--upgrade", "pip")

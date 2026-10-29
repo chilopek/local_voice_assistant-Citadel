@@ -39,6 +39,9 @@ def main(argv: list[str] | None = None) -> int:
     root = None
     callback_failed = False
     try:
+        from .tk_runtime import configure_tk_paths
+
+        logger.info("Tcl/Tk paths: %s", configure_tk_paths())
         import tkinter as tk
         from .gui import AssistantGUI
 

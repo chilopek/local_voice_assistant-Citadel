@@ -18,6 +18,6 @@ Invoke-ps2exe `
     -description "Установка локального голосового помощника" `
     -company "Local Assistant" `
     -product "Local Assistant" `
-    -version "0.1.13.0"
+    -version "0.1.14.0"
 
 Write-Host "Готово: .\dist\LocalAssistantSetup.exe" -ForegroundColor Green

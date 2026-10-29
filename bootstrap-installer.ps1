@@ -113,6 +113,7 @@ function Update-ProgressFromText([string]$text) {
     $stages = @(
         @{ Marker = "Проверка Windows"; Value = 5; Label = "Проверка системы" },
         @{ Marker = "Загрузка проекта"; Value = 12; Label = "Загрузка файлов проекта" },
+        @{ Marker = "Проверка Python и Tcl/Tk"; Value = 16; Label = "Проверка графического окружения Python" },
         @{ Marker = "Обнаружено оборудование"; Value = 20; Label = "Оценка компьютера" },
         @{ Marker = "Выбор модели"; Value = 25; Label = "Подготовка конфигурации" },
         @{ Marker = "Создание виртуального окружения"; Value = 38; Label = "Подготовка Python" },
