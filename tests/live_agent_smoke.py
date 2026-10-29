@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory() as folder:
     prompt = (
         "Создай в рабочей папке файл agent-proof.txt с текстом «агент проверен», затем прочитай его инструментом и сообщи точный текст. Выполни задачу сейчас."
         if args.case == "file" else
-        "Найди в интернете официальную страницу скачивания Python, прочитай её и сообщи последнюю стабильную версию и ссылку на источник. Используй инструменты."
+        "Прочитай официальную страницу https://www.python.org/downloads/latest/ и сообщи номер последней стабильной версии Python, дату релиза и ссылку на источник. Проверь сведения инструментами."
     )
     with patch("assistant.tools.WORKSPACE", root), patch("assistant.app.WORKSPACE", root), patch("assistant.tools.is_inside_workspace", lambda p: p.is_relative_to(root)):
         answer = run_turn(client, memory, [], prompt, confirm=lambda name, arguments: name == "write_file" and arguments.get("path") == "agent-proof.txt", on_event=progress)
