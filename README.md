@@ -29,7 +29,7 @@
 
 ### Вариант 1: EXE-установщик
 
-Скачайте [актуальный `LocalAssistantSetup.exe` из релиза v0.1.12](https://github.com/chilopek/local-assistant/releases/download/v0.1.12/LocalAssistantSetup.exe), запустите файл и выберите режим:
+Скачайте [актуальный `LocalAssistantSetup.exe` из релиза v0.1.13](https://github.com/chilopek/local-assistant/releases/download/v0.1.13/LocalAssistantSetup.exe), запустите файл и выберите режим:
 
 - `auto` — автоматический подбор по характеристикам компьютера;
 - `fast` — минимальная задержка и небольшая модель;

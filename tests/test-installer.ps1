@@ -70,3 +70,4 @@ foreach ($file in @('scripts\run.ps1', 'install.ps1', 'bootstrap-installer.ps1',
     if ($errors.Count) { throw "Parse error in $file : $($errors | Out-String)" }
 }
 Write-Host 'PASS: background exit codes (0/17), native stderr, live logs, Windows PowerShell parser'
+exit 0
