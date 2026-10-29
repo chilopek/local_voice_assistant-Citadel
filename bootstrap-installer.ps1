@@ -67,19 +67,28 @@ $closeButton.Add_Click({ $form.Close() })
 $form.Controls.Add($closeButton)
 
 $progress = New-Object System.Windows.Forms.ProgressBar
-$progress.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+$progress.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+$progress.Minimum = 0
+$progress.Maximum = 100
+$progress.Value = 0
 $progress.Visible = $false
 $progress.Size = New-Object System.Drawing.Size(620, 18)
 $progress.Location = New-Object System.Drawing.Point(27, 215)
 $form.Controls.Add($progress)
+
+$progressStatus = New-Object System.Windows.Forms.Label
+$progressStatus.Text = "Готово: 0%"
+$progressStatus.AutoSize = $true
+$progressStatus.Location = New-Object System.Drawing.Point(27, 236)
+$form.Controls.Add($progressStatus)
 
 $log = New-Object System.Windows.Forms.TextBox
 $log.Multiline = $true
 $log.ReadOnly = $true
 $log.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
 $log.Font = New-Object System.Drawing.Font("Consolas", 9)
-$log.Size = New-Object System.Drawing.Size(620, 195)
-$log.Location = New-Object System.Drawing.Point(27, 245)
+$log.Size = New-Object System.Drawing.Size(620, 174)
+$log.Location = New-Object System.Drawing.Point(27, 260)
 $form.Controls.Add($log)
 
 $desktopPath = [Environment]::GetFolderPath("Desktop")
@@ -97,6 +106,29 @@ function Add-Log([string]$text) {
             [IO.File]::AppendAllText($script:sessionLogPath, $text + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
         }
     } catch {}
+}
+
+function Update-ProgressFromText([string]$text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return }
+    $stages = @(
+        @{ Marker = "Проверка Windows"; Value = 5; Label = "Проверка системы" },
+        @{ Marker = "Загрузка проекта"; Value = 12; Label = "Загрузка файлов проекта" },
+        @{ Marker = "Обнаружено оборудование"; Value = 20; Label = "Оценка компьютера" },
+        @{ Marker = "Выбор модели"; Value = 25; Label = "Подготовка конфигурации" },
+        @{ Marker = "Создание виртуального окружения"; Value = 38; Label = "Подготовка Python" },
+        @{ Marker = "Установка Python-зависимостей"; Value = 52; Label = "Установка зависимостей" },
+        @{ Marker = "Установка голосовых зависимостей"; Value = 68; Label = "Установка голосового режима" },
+        @{ Marker = "Запуск локального сервиса Ollama"; Value = 76; Label = "Запуск Ollama" },
+        @{ Marker = "Загрузка модели"; Value = 86; Label = "Загрузка модели" },
+        @{ Marker = "Создание ярлыка"; Value = 97; Label = "Создание ярлыка" },
+        @{ Marker = "Установка завершена"; Value = 100; Label = "Завершено" }
+    )
+    foreach ($stage in $stages) {
+        if ($text.IndexOf($stage.Marker, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            if ($stage.Value -gt $progress.Value) { $progress.Value = $stage.Value }
+            $progressStatus.Text = "$($progress.Value)% — $($stage.Label)"
+        }
+    }
 }
 
 function Read-InstallerText([string]$path) {
@@ -122,26 +154,60 @@ $script:installProcess = $null
 $script:installTempScript = $null
 $script:installStdoutPath = $null
 $script:installStderrPath = $null
+$script:installStdoutOffset = 0
+$script:installStderrOffset = 0
+$script:installLastOutputAt = [DateTime]::Now
+
+function Read-NewInstallerText([string]$path, [ref]$offset) {
+    $text = Read-InstallerText $path
+    if ([string]::IsNullOrEmpty($text)) { return "" }
+    if ($text.Length -lt $offset.Value) { $offset.Value = 0 }
+    if ($text.Length -eq $offset.Value) { return "" }
+    $chunk = $text.Substring($offset.Value)
+    $offset.Value = $text.Length
+    return $chunk
+}
+
+function Flush-InstallerOutput {
+    $stdoutChunk = Read-NewInstallerText $script:installStdoutPath ([ref]$script:installStdoutOffset)
+    $stderrChunk = Read-NewInstallerText $script:installStderrPath ([ref]$script:installStderrOffset)
+    if (-not [string]::IsNullOrWhiteSpace($stdoutChunk)) {
+        Add-Log $stdoutChunk.TrimEnd()
+        Update-ProgressFromText $stdoutChunk
+        $script:installLastOutputAt = [DateTime]::Now
+    }
+    if (-not [string]::IsNullOrWhiteSpace($stderrChunk)) {
+        Add-Log $stderrChunk.TrimEnd()
+        Update-ProgressFromText $stderrChunk
+        $script:installLastOutputAt = [DateTime]::Now
+    }
+    if (([DateTime]::Now - $script:installLastOutputAt).TotalSeconds -ge 15) {
+        Add-Log "Установка продолжается... ожидаем ответ от текущего шага."
+        $script:installLastOutputAt = [DateTime]::Now
+    }
+}
 
 $installTimer = New-Object System.Windows.Forms.Timer
 $installTimer.Interval = 500
 $installTimer.Add_Tick({
     if ($null -eq $script:installProcess) { return }
+    Flush-InstallerOutput
     if (-not $script:installProcess.HasExited) { return }
 
     $exitCode = $script:installProcess.ExitCode
     $stdout = Read-InstallerText $script:installStdoutPath
     $stderr = Read-InstallerText $script:installStderrPath
 
-    if ($stdout) { Add-Log $stdout.Trim() }
-    if ($stderr) { Add-Log $stderr.Trim() }
     $installTimer.Stop()
 
     if ($exitCode -eq 0) {
+        $progress.Value = 100
+        $progressStatus.Text = "100% — Завершено"
         Add-Log ""
         Add-Log "Установка завершена. Ярлык создан на рабочем столе."
         [System.Windows.Forms.MessageBox]::Show("Помощник установлен.", "Готово", "OK", "Information") | Out-Null
     } else {
+        $progressStatus.Text = "Ошибка — см. подробности в логе"
         $details = if ($stderr) { $stderr.Trim() } elseif ($stdout) { $stdout.Trim() } else { "Процесс завершился с кодом $exitCode." }
         Add-Log ("ОШИБКА: " + $details)
         Add-Log ("Лог процесса: " + $script:installStderrPath)
@@ -155,7 +221,6 @@ $installTimer.Add_Tick({
         ) | Out-Null
     }
 
-    $progress.Visible = $false
     $installButton.Enabled = $true
     $closeButton.Enabled = $true
     $script:installProcess = $null
@@ -165,6 +230,8 @@ $installButton.Add_Click({
     $installButton.Enabled = $false
     $closeButton.Enabled = $false
     $progress.Visible = $true
+    $progress.Value = 1
+    $progressStatus.Text = "1% — Запуск установщика"
     Add-Log "Подготовка установки..."
     Add-Log ("Подробный лог: " + $script:sessionLogPath)
 
@@ -180,6 +247,7 @@ $installButton.Add_Click({
         $tempScript = Join-Path ([IO.Path]::GetTempPath()) ("local-assistant-install-{0}.ps1" -f $PID)
         $stdoutPath = Join-Path ([IO.Path]::GetTempPath()) ("local-assistant-install-{0}.out.log" -f $PID)
         $stderrPath = Join-Path ([IO.Path]::GetTempPath()) ("local-assistant-install-{0}.err.log" -f $PID)
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
         Invoke-WebRequest -Uri $rawInstallerUrl -OutFile $tempScript -UseBasicParsing -ErrorAction Stop
 
         # Windows PowerShell 5.1 treats UTF-8 without BOM as the system ANSI code page.
@@ -195,6 +263,9 @@ $installButton.Add_Click({
         $script:installTempScript = $tempScript
         $script:installStdoutPath = $stdoutPath
         $script:installStderrPath = $stderrPath
+        $script:installStdoutOffset = 0
+        $script:installStderrOffset = 0
+        $script:installLastOutputAt = [DateTime]::Now
         $arguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$tempScript`" -RepoUrl `"$repoUrl`" -Mode $mode -Voice $voice -NonInteractive"
         $script:installProcess = Start-Process -FilePath $powershell -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
         $installTimer.Start()
