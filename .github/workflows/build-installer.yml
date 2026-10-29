@@ -5,6 +5,12 @@ on:
     paths:
       - "bootstrap-installer.ps1"
       - "build-installer.ps1"
+      - "install.ps1"
+      - "assistant/**"
+      - "scripts/**"
+      - "tests/**"
+      - "assets/**"
+      - "pyproject.toml"
       - ".github/workflows/build-installer.yml"
   workflow_dispatch:
 
@@ -14,6 +20,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Build EXE
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prepare test environment
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -e .
+
+      - name: Test actual GUI startup and failure logging
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+
+      - name: Test Windows PowerShell 5.1 installer behavior
+        shell: powershell
+        run: .\tests\test-installer.ps1
 
       - name: Build EXE
         shell: pwsh

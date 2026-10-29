@@ -1,49 +1,38 @@
 param(
-    [switch]$Console
+    [switch]$Console,
+    [switch]$Check
 )
 
+# Keep this wrapper ASCII so Windows PowerShell 5.1 can always read it.
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
-Set-Location $projectRoot
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-
-if (-not (Test-Path ".venv\Scripts\python.exe")) {
-    throw "Сначала выполните .\scripts\setup.ps1"
-}
-
-$env:ASSISTANT_WORKSPACE = $projectRoot
-$module = if ($Console) { "assistant" } else { "assistant.gui" }
 $launchLog = Join-Path $projectRoot "assistant-launch.log"
-
 try {
-    Add-Content -LiteralPath $launchLog -Value "[$(Get-Date -Format s)] Запуск модуля $module" -Encoding utf8
-    if ($Console) {
-        & .venv\Scripts\python.exe -m $module
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0) { throw "Python завершился с кодом $exitCode." }
-    } else {
-        $output = & .venv\Scripts\python.exe -m $module 2>&1
-        $exitCode = $LASTEXITCODE
-        if ($output) { $output | Out-String | Add-Content -LiteralPath $launchLog -Encoding utf8 }
-        if ($exitCode -ne 0) {
-            $details = if ($output) { ($output | Out-String).Trim() } else { "Python завершился с кодом $exitCode." }
-            throw $details
-        }
+    Set-Location -LiteralPath $projectRoot
+    $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $python)) {
+        throw "Python environment missing. Run LocalAssistantSetup.exe again."
     }
-    Add-Content -LiteralPath $launchLog -Value "[$(Get-Date -Format s)] Завершено с кодом $exitCode" -Encoding utf8
-} catch {
-    $details = $_.Exception.ToString()
-    Add-Content -LiteralPath $launchLog -Value "[$(Get-Date -Format s)] ОШИБКА: $details" -Encoding utf8
+    $env:ASSISTANT_WORKSPACE = $projectRoot
+    $env:PYTHONUTF8 = "1"
+    $savedPreference = $ErrorActionPreference
     try {
+        $ErrorActionPreference = "Continue"
+        if ($Console) { & $python -m assistant }
+        elseif ($Check) { & $python -m assistant.launcher --check }
+        else { & $python -m assistant.launcher }
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedPreference
+    }
+    exit $code
+} catch {
+    $details = $_.ToString()
+    Add-Content -LiteralPath $launchLog -Encoding UTF8 -Value "$(Get-Date -Format s) $details"
+    if (-not $Check) {
         Add-Type -AssemblyName System.Windows.Forms
-        [System.Windows.Forms.MessageBox]::Show(
-            "Помощник не запустился.`n`n$details`n`nПодробный лог:`n$launchLog",
-            "Ошибка запуска Local Assistant",
-            "OK",
-            "Error"
-        ) | Out-Null
-    } catch {}
-    Write-Error "Помощник не запустился. Лог: $launchLog`n$details"
-    if ($Host.Name -notmatch "ServerRemoteHost") { Read-Host "Нажмите Enter, чтобы закрыть окно" }
+        [System.Windows.Forms.MessageBox]::Show("$details`n`nLog: $launchLog", "Assistant startup error", "OK", "Error") | Out-Null
+    }
+    [Console]::Error.WriteLine($details)
     exit 1
 }

@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Windows.Forms
+﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -197,6 +197,13 @@ function Flush-InstallerOutput {
     }
 }
 
+function Start-InstallerProcess([string]$executable, [string]$arguments, [string]$stdoutPath, [string]$stderrPath) {
+    $child = Start-Process -FilePath $executable -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+    # Pin the handle while the child is alive; .NET Framework otherwise loses ExitCode.
+    $null = $child.Handle
+    return $child
+}
+
 $installTimer = New-Object System.Windows.Forms.Timer
 $installTimer.Interval = 500
 $installTimer.Add_Tick({
@@ -204,7 +211,13 @@ $installTimer.Add_Tick({
     Flush-InstallerOutput
     if (-not $script:installProcess.HasExited) { return }
 
+    $script:installProcess.WaitForExit()
+    $script:installProcess.Refresh()
     $exitCode = $script:installProcess.ExitCode
+    if ($null -eq $exitCode) {
+        Add-Log "Не удалось получить код завершения процесса. Проверьте последние строки лога."
+        $exitCode = -1
+    }
     $stdout = Read-InstallerText $script:installStdoutPath
     $stderr = Read-InstallerText $script:installStderrPath
 
@@ -222,7 +235,7 @@ $installTimer.Add_Tick({
         Add-Log ("ОШИБКА: " + $details)
         Add-Log ("Лог процесса: " + $script:installStderrPath)
         Add-Log ("Общий лог установщика: " + $script:sessionLogPath)
-        $preview = if ($details.Length -gt 1200) { $details.Substring(0, 1200) + "..." } else { $details }
+        $preview = if ($details.Length -gt 1800) { "..." + $details.Substring($details.Length - 1800) } else { $details }
         [System.Windows.Forms.MessageBox]::Show(
             "Установка завершилась с ошибкой (код $exitCode).`n`n$preview`n`nОбщий лог: $script:sessionLogPath",
             "Ошибка",
@@ -277,7 +290,7 @@ $installButton.Add_Click({
         $script:installStderrOffset = 0
         $script:installLastOutputAt = [DateTime]::Now
         $arguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$tempScript`" -RepoUrl `"$repoUrl`" -Mode $mode -Voice $voice -Update -NonInteractive"
-        $script:installProcess = Start-Process -FilePath $powershell -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+        $script:installProcess = Start-InstallerProcess $powershell $arguments $stdoutPath $stderrPath
         $installTimer.Start()
     } catch {
         $message = $_.Exception.ToString()

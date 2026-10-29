@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$RepoUrl,
@@ -22,11 +22,44 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$env:PYTHONUTF8 = "1"
+$env:PYTHONUNBUFFERED = "1"
+$script:currentStep = "Подготовка"
+$failureLog = Join-Path ([IO.Path]::GetTempPath()) "LocalAssistant-install-error.log"
+trap {
+    $details = "Этап: $script:currentStep`n$($_ | Out-String -Width 240)`n$($_.ScriptStackTrace)"
+    [IO.File]::WriteAllText($failureLog, $details, (New-Object Text.UTF8Encoding($true)))
+    [Console]::Error.WriteLine($details)
+    [Console]::Error.WriteLine("Полный отчёт об ошибке: $failureLog")
+    exit 1
+}
 $pythonFallbackUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
 $pythonFallbackMd5 = "5eddb0b6f12c852725de071ae681dde4"
 
 function Step([string]$message) {
+    $script:currentStep = $message
     Write-Host "`n==> $message" -ForegroundColor Cyan
+}
+
+function Invoke-CheckedCommand([string]$executable, [string[]]$arguments) {
+    # Windows PowerShell 5.1 can turn harmless native stderr into a terminating
+    # NativeCommandError under Stop. Only the process exit code indicates failure.
+    $savedPreference = $ErrorActionPreference
+    $tail = New-Object 'System.Collections.Generic.Queue[string]'
+    try {
+        $ErrorActionPreference = "Continue"
+        $PSNativeCommandUseErrorActionPreference = $false
+        & $executable @arguments 2>&1 | ForEach-Object {
+            $line = $_.ToString()
+            [Console]::WriteLine($line)
+            $tail.Enqueue($line)
+            if ($tail.Count -gt 30) { $null = $tail.Dequeue() }
+        }
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedPreference
+    }
+    if ($code -ne 0) { throw "Команда $executable завершилась с кодом $code.`n$($tail.ToArray() -join [Environment]::NewLine)" }
 }
 
 function Find-Executable([string]$name, [string[]]$knownPaths = @()) {
@@ -47,8 +80,7 @@ function Install-WingetPackage([string]$id, [string]$label, [switch]$UserScope) 
     Step "Установка $label"
     $args = @("install", "--id", $id, "-e", "--accept-source-agreements", "--accept-package-agreements")
     if ($UserScope) { $args += @("--scope", "user") }
-    & $winget @args
-    if ($LASTEXITCODE -ne 0) { throw "Не удалось установить $label через winget." }
+    Invoke-CheckedCommand $winget $args
 }
 
 function Install-PythonFallback {
@@ -268,16 +300,14 @@ if (Test-Path -LiteralPath $InstallDir) {
     if (Test-Path -LiteralPath $gitFolder) {
         if ($Update) {
             if ($git) {
-                & $git -C $InstallDir pull --ff-only
-                if ($LASTEXITCODE -ne 0) { throw "Не удалось обновить существующий проект." }
+                Invoke-CheckedCommand $git @("-C", $InstallDir, "pull", "--ff-only")
             } else {
                 Download-ProjectZip $InstallDir $RepoUrl
             }
         }
     } elseif (@(Get-ChildItem -LiteralPath $InstallDir -Force).Count -eq 0) {
         if ($git) {
-            & $git clone --depth 1 $RepoUrl $InstallDir
-            if ($LASTEXITCODE -ne 0) { throw "Не удалось клонировать репозиторий." }
+            Invoke-CheckedCommand $git @("clone", "--depth", "1", $RepoUrl, $InstallDir)
         } else {
             Download-ProjectZip $InstallDir $RepoUrl
         }
@@ -289,8 +319,7 @@ if (Test-Path -LiteralPath $InstallDir) {
 } else {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $InstallDir) | Out-Null
     if ($git) {
-        & $git clone --depth 1 $RepoUrl $InstallDir
-        if ($LASTEXITCODE -ne 0) { throw "Не удалось клонировать репозиторий." }
+        Invoke-CheckedCommand $git @("clone", "--depth", "1", $RepoUrl, $InstallDir)
     } else {
         Download-ProjectZip $InstallDir $RepoUrl
     }
@@ -318,27 +347,21 @@ $localConfig | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallDir 
 Step "Создание виртуального окружения Python"
 $venv = Join-Path $InstallDir ".venv"
 if (-not (Test-Path -LiteralPath (Join-Path $venv "Scripts\python.exe"))) {
-    if ($python.Launcher) { & $python.Path "-$($python.LauncherVersion)" -m venv $venv }
-    else { & $python.Path -m venv $venv }
-    if ($LASTEXITCODE -ne 0) { throw "Не удалось создать виртуальное окружение Python." }
+    $venvArguments = @("-m", "venv", $venv)
+    if ($python.Launcher) { $venvArguments = @("-$($python.LauncherVersion)") + $venvArguments }
+    Invoke-CheckedCommand $python.Path $venvArguments
 }
 $venvPython = Join-Path $venv "Scripts\python.exe"
 Step "Установка Python-зависимостей"
-& $venvPython -m pip install --upgrade pip
-if ($LASTEXITCODE -ne 0) { throw "Не удалось обновить pip." }
+Invoke-CheckedCommand $venvPython @("-m", "pip", "install", "--upgrade", "pip")
 $basePackageSpec = $InstallDir
-& $venvPython -m pip install -e $basePackageSpec
-if ($LASTEXITCODE -ne 0) { throw "Не удалось установить зависимости проекта." }
+Invoke-CheckedCommand $venvPython @("-m", "pip", "install", "-e", $basePackageSpec)
 
 if ($voiceEnabled) {
     try {
         Step "Установка голосовых зависимостей"
         $voicePackageSpec = "$InstallDir[voice]"
-        & $venvPython -m pip install -e $voicePackageSpec
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Голосовые зависимости не установились. Продолжаю без голосового режима."
-            $voiceEnabled = $false
-        }
+        Invoke-CheckedCommand $venvPython @("-m", "pip", "install", "-e", $voicePackageSpec)
     } catch {
         Write-Warning ("Голосовые зависимости пропущены: " + $_.Exception.Message)
         $voiceEnabled = $false
@@ -350,28 +373,30 @@ if (-not $voiceEnabled) {
     $localConfig | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallDir "assistant.local.json") -Encoding utf8
 }
 
-& $venvPython -c "from assistant import __version__; print('local-assistant', __version__)"
-if ($LASTEXITCODE -ne 0) { throw "Файлы помощника не прошли проверку импорта." }
+Step "Проверка запуска окна помощника"
+Push-Location -LiteralPath $InstallDir
+try {
+    Invoke-CheckedCommand $venvPython @("-c", "import subprocess,sys; r=subprocess.run([sys.executable,'-m','assistant.launcher','--check'],timeout=60); sys.exit(r.returncode)")
+} finally { Pop-Location }
 
 Wait-Ollama $ollama
 $models = (Invoke-RestMethod "http://127.0.0.1:11434/api/tags").models
 $alreadyInstalled = @($models | Where-Object { $_.name -eq $selectedModel }).Count -gt 0
 if (-not $alreadyInstalled) {
     Step "Загрузка модели $selectedModel"
-    & $ollama pull $selectedModel
-    if ($LASTEXITCODE -ne 0) { throw "Не удалось загрузить модель $selectedModel." }
+    Invoke-CheckedCommand $ollama @("pull", $selectedModel)
 }
 
 if (-not $NoShortcut) {
     Step "Создание ярлыка на рабочем столе"
     $desktop = [Environment]::GetFolderPath("Desktop")
     $shortcutPath = Join-Path $desktop "Локальный помощник.lnk"
-    $powershell = (Get-Command powershell.exe).Source
-    $runScript = Join-Path $InstallDir "scripts\run.ps1"
+    $windowedPython = Join-Path $venv "Scripts\pythonw.exe"
+    if (-not (Test-Path -LiteralPath $windowedPython)) { throw "Не найден pythonw.exe: $windowedPython" }
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $powershell
-    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$runScript`""
+    $shortcut.TargetPath = $windowedPython
+    $shortcut.Arguments = "-m assistant.launcher"
     $shortcut.WorkingDirectory = $InstallDir
     $iconPath = Join-Path $InstallDir "assets\citadel.ico"
     if (Test-Path -LiteralPath $iconPath) { $shortcut.IconLocation = "$iconPath,0" }

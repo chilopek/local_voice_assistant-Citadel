@@ -25,7 +25,7 @@ MODE_LABELS = {
 
 
 class AssistantGUI:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, *, enable_hotkey: bool = True) -> None:
         self.root = root
         self.root.title("Цитадель — локальный помощник")
         self.root.geometry("900x650")
@@ -47,11 +47,12 @@ class AssistantGUI:
 
         self.mode_var = tk.StringVar(value=MODE_LABELS[self.mode])
         self.status_var = tk.StringVar(value="Готов к работе")
-        self.speak_var = tk.BooleanVar(value=True)
+        self.speak_var = tk.BooleanVar(value=VOICE_ENABLED)
 
         self._build_style()
         self._build_ui()
-        self._start_hotkey()
+        if enable_hotkey:
+            self._start_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(100, self._drain_events)
         self._append_message("Цитадель", "Готова. Выберите режим и нажмите Ctrl+Alt+C или кнопку микрофона.")
@@ -313,15 +314,9 @@ class AssistantGUI:
 
 
 def main() -> None:
-    root = tk.Tk()
-    icon_path = Path(__file__).resolve().parents[1] / "assets" / "citadel.ico"
-    if icon_path.exists():
-        try:
-            root.iconbitmap(default=str(icon_path))
-        except tk.TclError:
-            pass
-    AssistantGUI(root)
-    root.mainloop()
+    from .launcher import main as launch
+
+    raise SystemExit(launch())
 
 
 if __name__ == "__main__":

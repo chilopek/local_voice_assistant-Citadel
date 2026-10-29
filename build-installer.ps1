@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 Set-ExecutionPolicy -Scope Process Bypass -Force
 
 if (-not (Get-Command Invoke-ps2exe -ErrorAction SilentlyContinue)) {
@@ -18,6 +18,6 @@ Invoke-ps2exe `
     -description "Установка локального голосового помощника" `
     -company "Local Assistant" `
     -product "Local Assistant" `
-    -version "0.1.0.0"
+    -version "0.1.13.0"
 
 Write-Host "Готово: .\dist\LocalAssistantSetup.exe" -ForegroundColor Green
