@@ -45,17 +45,24 @@ $modeBox.Size = New-Object System.Drawing.Size(360, 28)
 $modeBox.Location = New-Object System.Drawing.Point(145, 94)
 $form.Controls.Add($modeBox)
 
+$voiceCheck = New-Object System.Windows.Forms.CheckBox
+$voiceCheck.Text = "Установить голосовой режим (дополнительные пакеты)"
+$voiceCheck.Checked = $true
+$voiceCheck.AutoSize = $true
+$voiceCheck.Location = New-Object System.Drawing.Point(27, 130)
+$form.Controls.Add($voiceCheck)
+
 $installButton = New-Object System.Windows.Forms.Button
 $installButton.Text = "Установить"
 $installButton.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $installButton.Size = New-Object System.Drawing.Size(150, 38)
-$installButton.Location = New-Object System.Drawing.Point(27, 140)
+$installButton.Location = New-Object System.Drawing.Point(27, 165)
 $form.Controls.Add($installButton)
 
 $closeButton = New-Object System.Windows.Forms.Button
 $closeButton.Text = "Закрыть"
 $closeButton.Size = New-Object System.Drawing.Size(100, 38)
-$closeButton.Location = New-Object System.Drawing.Point(187, 140)
+$closeButton.Location = New-Object System.Drawing.Point(187, 165)
 $closeButton.Add_Click({ $form.Close() })
 $form.Controls.Add($closeButton)
 
@@ -63,7 +70,7 @@ $progress = New-Object System.Windows.Forms.ProgressBar
 $progress.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
 $progress.Visible = $false
 $progress.Size = New-Object System.Drawing.Size(620, 18)
-$progress.Location = New-Object System.Drawing.Point(27, 195)
+$progress.Location = New-Object System.Drawing.Point(27, 215)
 $form.Controls.Add($progress)
 
 $log = New-Object System.Windows.Forms.TextBox
@@ -71,13 +78,58 @@ $log.Multiline = $true
 $log.ReadOnly = $true
 $log.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
 $log.Font = New-Object System.Drawing.Font("Consolas", 9)
-$log.Size = New-Object System.Drawing.Size(620, 220)
-$log.Location = New-Object System.Drawing.Point(27, 225)
+$log.Size = New-Object System.Drawing.Size(620, 195)
+$log.Location = New-Object System.Drawing.Point(27, 245)
 $form.Controls.Add($log)
 
 function Add-Log([string]$text) {
     $log.AppendText($text + [Environment]::NewLine)
 }
+
+$script:installProcess = $null
+$script:installTempScript = $null
+$script:installStdoutPath = $null
+$script:installStderrPath = $null
+
+$installTimer = New-Object System.Windows.Forms.Timer
+$installTimer.Interval = 500
+$installTimer.Add_Tick({
+    if ($null -eq $script:installProcess) { return }
+    if (-not $script:installProcess.HasExited) { return }
+
+    $exitCode = $script:installProcess.ExitCode
+    $stdout = if (Test-Path -LiteralPath $script:installStdoutPath) {
+        Get-Content -LiteralPath $script:installStdoutPath -Raw -ErrorAction SilentlyContinue
+    } else { "" }
+    $stderr = if (Test-Path -LiteralPath $script:installStderrPath) {
+        Get-Content -LiteralPath $script:installStderrPath -Raw -ErrorAction SilentlyContinue
+    } else { "" }
+
+    if ($stdout) { Add-Log $stdout.Trim() }
+    if ($stderr) { Add-Log $stderr.Trim() }
+    $installTimer.Stop()
+
+    if ($exitCode -eq 0) {
+        Add-Log ""
+        Add-Log "Установка завершена. Ярлык создан на рабочем столе."
+        [System.Windows.Forms.MessageBox]::Show("Помощник установлен.", "Готово", "OK", "Information") | Out-Null
+    } else {
+        $details = if ($stderr) { $stderr.Trim() } elseif ($stdout) { $stdout.Trim() } else { "Процесс завершился с кодом $exitCode." }
+        Add-Log ("ОШИБКА: " + $details)
+        Add-Log ("Полный лог: " + $script:installStderrPath)
+        [System.Windows.Forms.MessageBox]::Show(
+            "Установка завершилась с ошибкой (код $exitCode). Подробности и путь к логу показаны в окне.",
+            "Ошибка",
+            "OK",
+            "Error"
+        ) | Out-Null
+    }
+
+    $progress.Visible = $false
+    $installButton.Enabled = $true
+    $closeButton.Enabled = $true
+    $script:installProcess = $null
+})
 
 $installButton.Add_Click({
     $installButton.Enabled = $false
@@ -91,58 +143,32 @@ $installButton.Add_Click({
         3 { "power" }
         default { "auto" }
     }
+    $voice = if ($voiceCheck.Checked) { "on" } else { "off" }
 
-    $worker = New-Object System.ComponentModel.BackgroundWorker
-    $worker.add_DoWork({
-        param($sender, $eventArgs)
-        try {
-            $tempScript = Join-Path ([IO.Path]::GetTempPath()) "local-assistant-install.ps1"
-            Invoke-WebRequest -Uri $rawInstallerUrl -OutFile $tempScript -UseBasicParsing
+    try {
+        $tempScript = Join-Path ([IO.Path]::GetTempPath()) ("local-assistant-install-{0}.ps1" -f $PID)
+        $stdoutPath = Join-Path ([IO.Path]::GetTempPath()) ("local-assistant-install-{0}.out.log" -f $PID)
+        $stderrPath = Join-Path ([IO.Path]::GetTempPath()) ("local-assistant-install-{0}.err.log" -f $PID)
+        Invoke-WebRequest -Uri $rawInstallerUrl -OutFile $tempScript -UseBasicParsing -ErrorAction Stop
 
-            $psi = New-Object System.Diagnostics.ProcessStartInfo
-            $psi.FileName = "powershell.exe"
-            $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$tempScript`" -RepoUrl `"$repoUrl`" -Mode $mode -NonInteractive"
-            $psi.UseShellExecute = $false
-            $psi.CreateNoWindow = $true
-            $psi.RedirectStandardOutput = $true
-            $psi.RedirectStandardError = $true
+        $powershell = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+        if (-not $powershell) { $powershell = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source }
+        if (-not $powershell) { throw "Не найден PowerShell (powershell.exe или pwsh.exe)." }
 
-            $process = New-Object System.Diagnostics.Process
-            $process.StartInfo = $psi
-            [void]$process.Start()
-            $stdout = $process.StandardOutput.ReadToEnd()
-            $stderr = $process.StandardError.ReadToEnd()
-            $process.WaitForExit()
-            $eventArgs.Result = [PSCustomObject]@{
-                ExitCode = $process.ExitCode
-                Output = $stdout
-                Error = $stderr
-            }
-        } catch {
-            $eventArgs.Result = [PSCustomObject]@{
-                ExitCode = 1
-                Output = ""
-                Error = $_.Exception.Message
-            }
-        }
-    })
-    $worker.add_RunWorkerCompleted({
-        param($sender, $eventArgs)
-        $result = $eventArgs.Result
-        if ($result.Output) { Add-Log $result.Output.Trim() }
-        if ($result.ExitCode -eq 0) {
-            Add-Log ""
-            Add-Log "Установка завершена. Ярлык создан на рабочем столе."
-            [System.Windows.Forms.MessageBox]::Show("Помощник установлен.", "Готово", "OK", "Information") | Out-Null
-        } else {
-            if ($result.Error) { Add-Log ("ОШИБКА: " + $result.Error.Trim()) }
-            [System.Windows.Forms.MessageBox]::Show("Установка завершилась с ошибкой. Подробности показаны в окне.", "Ошибка", "OK", "Error") | Out-Null
-        }
+        $script:installTempScript = $tempScript
+        $script:installStdoutPath = $stdoutPath
+        $script:installStderrPath = $stderrPath
+        $arguments = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$tempScript`" -RepoUrl `"$repoUrl`" -Mode $mode -Voice $voice -NonInteractive"
+        $script:installProcess = Start-Process -FilePath $powershell -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+        $installTimer.Start()
+    } catch {
+        $message = $_.Exception.ToString()
+        Add-Log ("ОШИБКА ЗАПУСКА: " + $message)
+        [System.Windows.Forms.MessageBox]::Show("Не удалось запустить установку. Подробности показаны в окне.", "Ошибка", "OK", "Error") | Out-Null
         $progress.Visible = $false
         $installButton.Enabled = $true
         $closeButton.Enabled = $true
-    })
-    $worker.RunWorkerAsync()
+    }
 })
 
 $form.Add_Shown({ $form.Activate() })
