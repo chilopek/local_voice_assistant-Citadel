@@ -93,7 +93,7 @@ $installButton.Add_Click({
     }
 
     $worker = New-Object System.ComponentModel.BackgroundWorker
-    $worker.DoWork += {
+    $worker.add_DoWork({
         param($sender, $eventArgs)
         try {
             $tempScript = Join-Path ([IO.Path]::GetTempPath()) "local-assistant-install.ps1"
@@ -125,8 +125,8 @@ $installButton.Add_Click({
                 Error = $_.Exception.Message
             }
         }
-    }
-    $worker.RunWorkerCompleted += {
+    })
+    $worker.add_RunWorkerCompleted({
         param($sender, $eventArgs)
         $result = $eventArgs.Result
         if ($result.Output) { Add-Log $result.Output.Trim() }
@@ -141,7 +141,7 @@ $installButton.Add_Click({
         $progress.Visible = $false
         $installButton.Enabled = $true
         $closeButton.Enabled = $true
-    }
+    })
     $worker.RunWorkerAsync()
 })
 
