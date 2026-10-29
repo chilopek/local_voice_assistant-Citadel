@@ -74,11 +74,27 @@ function Install-PythonFallback {
     }
 }
 
+function Test-PythonRuntime([string]$path, [switch]$Launcher) {
+    $savedErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        if ($Launcher) {
+            & $path -3.12 -c "import sys; assert sys.version_info >= (3, 12)" 1>$null 2>$null
+        } else {
+            & $path -c "import sys; assert sys.version_info >= (3, 12)" 1>$null 2>$null
+        }
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
+    } finally {
+        $ErrorActionPreference = $savedErrorAction
+    }
+}
+
 function Find-Python {
     $py = Find-Executable "py.exe"
     if ($py) {
-        & $py -3.12 -c "import sys; assert sys.version_info >= (3, 12)" *> $null
-        if ($LASTEXITCODE -eq 0) { return @{ Path = $py; Launcher = $true } }
+        if (Test-PythonRuntime $py -Launcher) { return @{ Path = $py; Launcher = $true } }
     }
 
     $candidates = @()
@@ -106,8 +122,7 @@ function Find-Python {
 
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         if (-not (Test-Path -LiteralPath $candidate)) { continue }
-        & $candidate -c "import sys; assert sys.version_info >= (3, 12)" *> $null
-        if ($LASTEXITCODE -eq 0) { return @{ Path = $candidate; Launcher = $false } }
+        if (Test-PythonRuntime $candidate) { return @{ Path = $candidate; Launcher = $false } }
     }
     return $null
 }
