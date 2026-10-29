@@ -82,8 +82,38 @@ $log.Size = New-Object System.Drawing.Size(620, 195)
 $log.Location = New-Object System.Drawing.Point(27, 245)
 $form.Controls.Add($log)
 
+$desktopPath = [Environment]::GetFolderPath("Desktop")
+if ([string]::IsNullOrWhiteSpace($desktopPath)) { $desktopPath = [IO.Path]::GetTempPath() }
+$script:sessionLogPath = Join-Path $desktopPath "LocalAssistant-install.log"
+
 function Add-Log([string]$text) {
     $log.AppendText($text + [Environment]::NewLine)
+    try {
+        [IO.File]::AppendAllText(
+            $script:sessionLogPath,
+            $text + [Environment]::NewLine,
+            (New-Object System.Text.UTF8Encoding($false))
+        )
+    } catch {}
+}
+
+function Read-InstallerText([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return "" }
+    try {
+        $bytes = [IO.File]::ReadAllBytes($path)
+        if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+            return [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+        }
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            return [Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+        }
+        if ($bytes.Length -ge 2 -and $bytes[1] -eq 0) {
+            return [Text.Encoding]::Unicode.GetString($bytes)
+        }
+        return [Text.Encoding]::UTF8.GetString($bytes)
+    } catch {
+        return "Не удалось прочитать лог процесса: $($_.Exception.Message)"
+    }
 }
 
 $script:installProcess = $null
@@ -98,12 +128,8 @@ $installTimer.Add_Tick({
     if (-not $script:installProcess.HasExited) { return }
 
     $exitCode = $script:installProcess.ExitCode
-    $stdout = if (Test-Path -LiteralPath $script:installStdoutPath) {
-        Get-Content -LiteralPath $script:installStdoutPath -Raw -ErrorAction SilentlyContinue
-    } else { "" }
-    $stderr = if (Test-Path -LiteralPath $script:installStderrPath) {
-        Get-Content -LiteralPath $script:installStderrPath -Raw -ErrorAction SilentlyContinue
-    } else { "" }
+    $stdout = Read-InstallerText $script:installStdoutPath
+    $stderr = Read-InstallerText $script:installStderrPath
 
     if ($stdout) { Add-Log $stdout.Trim() }
     if ($stderr) { Add-Log $stderr.Trim() }
@@ -116,10 +142,11 @@ $installTimer.Add_Tick({
     } else {
         $details = if ($stderr) { $stderr.Trim() } elseif ($stdout) { $stdout.Trim() } else { "Процесс завершился с кодом $exitCode." }
         Add-Log ("ОШИБКА: " + $details)
-        Add-Log ("Полный лог: " + $script:installStderrPath)
+        Add-Log ("Лог процесса: " + $script:installStderrPath)
+        Add-Log ("Общий лог установщика: " + $script:sessionLogPath)
         $preview = if ($details.Length -gt 1200) { $details.Substring(0, 1200) + "..." } else { $details }
         [System.Windows.Forms.MessageBox]::Show(
-            "Установка завершилась с ошибкой (код $exitCode).`n`n$preview`n`nПолный лог: $script:installStderrPath",
+            "Установка завершилась с ошибкой (код $exitCode).`n`n$preview`n`nОбщий лог: $script:sessionLogPath",
             "Ошибка",
             "OK",
             "Error"
@@ -137,6 +164,7 @@ $installButton.Add_Click({
     $closeButton.Enabled = $false
     $progress.Visible = $true
     Add-Log "Подготовка установки..."
+    Add-Log ("Подробный лог: " + $script:sessionLogPath)
 
     $mode = switch ($modeBox.SelectedIndex) {
         1 { "fast" }
