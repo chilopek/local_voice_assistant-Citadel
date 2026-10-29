@@ -1,0 +1,26 @@
+name: Build Windows installer
+
+on:
+  push:
+    paths:
+      - "bootstrap-installer.ps1"
+      - "build-installer.ps1"
+      - ".github/workflows/build-installer.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build EXE
+        shell: pwsh
+        run: .\build-installer.ps1
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalAssistantSetup
+          path: dist/LocalAssistantSetup.exe
