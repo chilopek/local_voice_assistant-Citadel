@@ -74,12 +74,12 @@ function Install-PythonFallback {
     }
 }
 
-function Test-PythonRuntime([string]$path, [switch]$Launcher) {
+function Test-PythonRuntime([string]$path, [switch]$Launcher, [string]$LauncherVersion = "3") {
     $savedErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
         if ($Launcher) {
-            & $path -3.12 -c "import sys; assert sys.version_info >= (3, 12)" 1>$null 2>$null
+            & $path "-$LauncherVersion" -c "import sys; assert sys.version_info >= (3, 12)" 1>$null 2>$null
         } else {
             & $path -c "import sys; assert sys.version_info >= (3, 12)" 1>$null 2>$null
         }
@@ -94,7 +94,11 @@ function Test-PythonRuntime([string]$path, [switch]$Launcher) {
 function Find-Python {
     $py = Find-Executable "py.exe"
     if ($py) {
-        if (Test-PythonRuntime $py -Launcher) { return @{ Path = $py; Launcher = $true } }
+        foreach ($launcherVersion in @("3.14", "3.13", "3.12", "3")) {
+            if (Test-PythonRuntime $py -Launcher -LauncherVersion $launcherVersion) {
+                return @{ Path = $py; Launcher = $true; LauncherVersion = $launcherVersion }
+            }
+        }
     }
 
     $candidates = @()
@@ -249,7 +253,7 @@ if (-not $python) {
     }
     $python = Find-Python
 }
-if (-not $python) { throw "Python 3.12 установлен, но Python Launcher не найден." }
+if (-not $python) { throw "Совместимый Python 3.12 или новее не найден." }
 
 $ollama = Find-Ollama
 if (-not $ollama) {
@@ -314,7 +318,7 @@ $localConfig | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallDir 
 Step "Создание виртуального окружения Python"
 $venv = Join-Path $InstallDir ".venv"
 if (-not (Test-Path -LiteralPath (Join-Path $venv "Scripts\python.exe"))) {
-    if ($python.Launcher) { & $python.Path -3.12 -m venv $venv }
+    if ($python.Launcher) { & $python.Path "-$($python.LauncherVersion)" -m venv $venv }
     else { & $python.Path -m venv $venv }
     if ($LASTEXITCODE -ne 0) { throw "Не удалось создать виртуальное окружение Python." }
 }
