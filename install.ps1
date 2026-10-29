@@ -22,6 +22,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$pythonFallbackUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
+$pythonFallbackMd5 = "5eddb0b6f12c852725de071ae681dde4"
 
 function Step([string]$message) {
     Write-Host "`n==> $message" -ForegroundColor Cyan
@@ -47,6 +49,29 @@ function Install-WingetPackage([string]$id, [string]$label, [switch]$UserScope) 
     if ($UserScope) { $args += @("--scope", "user") }
     & $winget @args
     if ($LASTEXITCODE -ne 0) { throw "Не удалось установить $label через winget." }
+}
+
+function Install-PythonFallback {
+    $installerPath = Join-Path ([IO.Path]::GetTempPath()) ("python-3.12.10-{0}.exe" -f ([guid]::NewGuid().ToString("N")))
+    Step "Загрузка Python 3.12 с python.org"
+    Invoke-WebRequest -Uri $pythonFallbackUrl -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
+    $actualMd5 = (Get-FileHash -LiteralPath $installerPath -Algorithm MD5).Hash.ToLowerInvariant()
+    if ($actualMd5 -ne $pythonFallbackMd5) {
+        throw "Проверка скачанного Python не пройдена. Ожидался MD5 $pythonFallbackMd5, получен $actualMd5."
+    }
+
+    Step "Установка Python 3.12 без прав администратора"
+    $pythonInstall = Start-Process -FilePath $installerPath -ArgumentList @(
+        "/quiet",
+        "InstallAllUsers=0",
+        "PrependPath=0",
+        "Include_launcher=1",
+        "Include_test=0",
+        "SimpleInstall=1"
+    ) -Wait -PassThru
+    if ($pythonInstall.ExitCode -notin @(0, 3010)) {
+        throw "Официальный установщик Python завершился с кодом $($pythonInstall.ExitCode)."
+    }
 }
 
 function Find-Python {
@@ -150,6 +175,27 @@ function Select-Voice {
     return [string]::IsNullOrWhiteSpace($choice) -or $choice.Trim().ToLowerInvariant() -in @("y", "yes", "д", "да")
 }
 
+function Download-ProjectZip([string]$destination, [string]$repositoryUrl) {
+    $repositoryBase = $repositoryUrl.TrimEnd('/') -replace '\.git$', ''
+    if ($repositoryBase -notmatch '^https://github\.com/[^/]+/[^/]+$') {
+        throw "Git не найден, а ZIP-загрузка поддерживается только для GitHub-репозиториев: $repositoryUrl"
+    }
+
+    $archivePath = Join-Path ([IO.Path]::GetTempPath()) ("local-assistant-{0}.zip" -f ([guid]::NewGuid().ToString("N")))
+    $extractPath = Join-Path ([IO.Path]::GetTempPath()) ("local-assistant-extract-{0}" -f ([guid]::NewGuid().ToString("N")))
+    $archiveUrl = "$repositoryBase/archive/refs/heads/main.zip"
+    Step "Загрузка проекта из GitHub ZIP"
+    Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath -UseBasicParsing -ErrorAction Stop
+    New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
+    Expand-Archive -LiteralPath $archivePath -DestinationPath $extractPath -Force
+    $sourceRoot = Get-ChildItem -LiteralPath $extractPath -Directory | Select-Object -First 1
+    if (-not $sourceRoot) { throw "GitHub ZIP не содержит папку проекта." }
+    New-Item -ItemType Directory -Force -Path $destination | Out-Null
+    Get-ChildItem -LiteralPath $sourceRoot.FullName -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $destination $_.Name) -Recurse -Force
+    }
+}
+
 function Wait-Ollama([string]$ollamaPath) {
     $healthy = $false
     try { Invoke-RestMethod "http://127.0.0.1:11434/api/tags" -TimeoutSec 3 | Out-Null; $healthy = $true } catch {}
@@ -170,14 +216,22 @@ $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 
 $git = Find-Executable "git.exe"
 if (-not $git) {
-    Install-WingetPackage "Git.Git" "Git" -UserScope
+    try {
+        Install-WingetPackage "Git.Git" "Git" -UserScope
+    } catch {
+        Write-Warning "Git не установлен, продолжу через загрузку ZIP: $($_.Exception.Message)"
+    }
     $git = Find-Executable "git.exe" @("$env:ProgramFiles\Git\cmd\git.exe", "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe")
 }
-if (-not $git) { throw "Git установлен, но git.exe не найден." }
 
 $python = Find-Python
 if (-not $python) {
-    Install-WingetPackage "Python.Python.3.12" "Python 3.12" -UserScope
+    try {
+        Install-WingetPackage "Python.Python.3.12" "Python 3.12" -UserScope
+    } catch {
+        Write-Warning "Python через winget не установлен, использую официальный fallback: $($_.Exception.Message)"
+        Install-PythonFallback
+    }
     $python = Find-Python
 }
 if (-not $python) { throw "Python 3.12 установлен, но Python Launcher не найден." }
@@ -194,19 +248,33 @@ if (Test-Path -LiteralPath $InstallDir) {
     $gitFolder = Join-Path $InstallDir ".git"
     if (Test-Path -LiteralPath $gitFolder) {
         if ($Update) {
-            & $git -C $InstallDir pull --ff-only
-            if ($LASTEXITCODE -ne 0) { throw "Не удалось обновить существующий проект." }
+            if ($git) {
+                & $git -C $InstallDir pull --ff-only
+                if ($LASTEXITCODE -ne 0) { throw "Не удалось обновить существующий проект." }
+            } else {
+                Download-ProjectZip $InstallDir $RepoUrl
+            }
         }
     } elseif (@(Get-ChildItem -LiteralPath $InstallDir -Force).Count -eq 0) {
-        & $git clone --depth 1 $RepoUrl $InstallDir
-        if ($LASTEXITCODE -ne 0) { throw "Не удалось клонировать репозиторий." }
+        if ($git) {
+            & $git clone --depth 1 $RepoUrl $InstallDir
+            if ($LASTEXITCODE -ne 0) { throw "Не удалось клонировать репозиторий." }
+        } else {
+            Download-ProjectZip $InstallDir $RepoUrl
+        }
+    } elseif ($Update) {
+        Download-ProjectZip $InstallDir $RepoUrl
     } else {
         throw "Каталог установки уже существует и не является пустым Git-репозиторием: $InstallDir"
     }
 } else {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $InstallDir) | Out-Null
-    & $git clone --depth 1 $RepoUrl $InstallDir
-    if ($LASTEXITCODE -ne 0) { throw "Не удалось клонировать репозиторий." }
+    if ($git) {
+        & $git clone --depth 1 $RepoUrl $InstallDir
+        if ($LASTEXITCODE -ne 0) { throw "Не удалось клонировать репозиторий." }
+    } else {
+        Download-ProjectZip $InstallDir $RepoUrl
+    }
 }
 
 $selectedModel = Select-Model
