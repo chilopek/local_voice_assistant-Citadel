@@ -134,7 +134,16 @@ function Update-ProgressFromText([string]$text) {
 function Read-InstallerText([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return "" }
     try {
-        $bytes = [IO.File]::ReadAllBytes($path)
+        $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        try {
+            $memory = New-Object IO.MemoryStream
+            $stream.CopyTo($memory)
+            $bytes = $memory.ToArray()
+            $memory.Dispose()
+        } finally {
+            $stream.Dispose()
+        }
+        if ($bytes.Length -eq 0) { return "" }
         if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
             return [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
         }
@@ -146,7 +155,8 @@ function Read-InstallerText([string]$path) {
         }
         return [Text.Encoding]::UTF8.GetString($bytes)
     } catch {
-        return "Не удалось прочитать лог процесса: $($_.Exception.Message)"
+        # A redirected child-process stream can be briefly unavailable between writes.
+        return ""
     }
 }
 

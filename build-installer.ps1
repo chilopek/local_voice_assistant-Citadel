@@ -13,6 +13,7 @@ Invoke-ps2exe `
     -noConsole `
     -x64 `
     -DPIAware `
+    -iconFile .\assets\citadel.ico `
     -title "Local Assistant Setup" `
     -description "Установка локального голосового помощника" `
     -company "Local Assistant" `

@@ -373,6 +373,8 @@ if (-not $NoShortcut) {
     $shortcut.TargetPath = $powershell
     $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$runScript`""
     $shortcut.WorkingDirectory = $InstallDir
+    $iconPath = Join-Path $InstallDir "assets\citadel.ico"
+    if (Test-Path -LiteralPath $iconPath) { $shortcut.IconLocation = "$iconPath,0" }
     $shortcut.Description = "Локальный персональный помощник"
     $shortcut.Save()
 }

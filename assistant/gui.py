@@ -314,6 +314,12 @@ class AssistantGUI:
 
 def main() -> None:
     root = tk.Tk()
+    icon_path = Path(__file__).resolve().parents[1] / "assets" / "citadel.ico"
+    if icon_path.exists():
+        try:
+            root.iconbitmap(default=str(icon_path))
+        except tk.TclError:
+            pass
     AssistantGUI(root)
     root.mainloop()
 
