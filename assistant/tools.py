@@ -218,7 +218,7 @@ _int = {"type": "integer"}
 TOOL_SCHEMAS.extend([
     _schema("get_environment", "Получить ОС, рабочие папки, текущее время и возможности компьютера.", {}),
     _schema("search_web", "Искать любую актуальную информацию в интернете. Открывай найденные URL через fetch_url для проверки фактов.", {"query": _str, "max_results": _int}, ["query"]),
-    _schema("fetch_url", "Читать любой HTTP/HTTPS URL, API, JSON, XML, HTML. Возвращает источник и текст. Если сайт требует JavaScript, используй browser_open.", {"url": _str, "max_chars": _int}, ["url"]),
+    _schema("fetch_url", "Читать HTTP/HTTPS URL, API, JSON, XML, HTML порциями до 3500 символов. Для продолжения передай start=next_start. Если нужен JavaScript, используй browser_open.", {"url": _str, "max_chars": _int, "start": _int}, ["url"]),
     _schema("run_python", "Выполнить Python для вычислений, документов, обработки файлов и произвольной автоматизации. Код подтверждается пользователем. Доступен subprocess для установки необходимых пакетов.", {"code": _str, "timeout": _int}, ["code"]),
     _schema("download_file", "Скачать файл по URL на компьютер, не перезаписывая существующий. Требуется подтверждение.", {"url": _str, "path": _str}, ["url", "path"]),
     _schema("browser_open", "Открыть произвольный сайт в управляемом браузере Цитадели и прочитать текст/элементы. Это отдельный профиль браузера.", {"url": _str}, ["url"]),
