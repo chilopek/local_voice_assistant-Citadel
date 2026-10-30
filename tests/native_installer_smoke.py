@@ -23,6 +23,17 @@ def registered() -> bool:
         return False
 
 
+def registered_uninstaller(install: Path) -> Path:
+    # Inno can choose unins001 after a rapid reinstall while the former
+    # uninstaller finishes removing itself. Follow the same registry as the app.
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY) as key:
+        command = winreg.QueryValueEx(key, "UninstallString")[0].strip()
+    executable = command[1:command.index('"', 1)] if command.startswith('"') else command
+    path = Path(executable).resolve()
+    assert path.parent == install.resolve() and path.is_file(), path
+    return path
+
+
 def run(arguments: list[str], *, env: dict | None = None) -> None:
     result = subprocess.run(arguments, env=env, capture_output=True, timeout=600)
     if result.returncode:
@@ -72,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix="citadel-native-integration-") as folder
     unknown = install / "unknown-root-file.txt"
     unknown.write_text("not an installed payload file", encoding="utf-8")
     print("PASS: install, private Python/Tcl/voice imports, GUI startup, registered uninstaller", flush=True)
-    run([str(install / "unins000.exe"), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], env=env)
+    run([str(registered_uninstaller(install)), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], env=env)
     assert not registered()
     assert not (install / "runtime").exists()
     assert not (install / "app").exists()
@@ -83,7 +94,7 @@ with tempfile.TemporaryDirectory(prefix="citadel-native-integration-") as folder
     import _winapi
     if hasattr(_winapi, "CreateJunction"):
         _winapi.CreateJunction(str(outside), str(data / "outside-junction"))
-    run([str(install / "unins000.exe"), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/PURGEDATA=1"], env=env)
+    run([str(registered_uninstaller(install)), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/PURGEDATA=1"], env=env)
     assert not registered() and not data.exists()
     assert unknown.exists() and outside_file.exists()
     assert base_python.exists()
