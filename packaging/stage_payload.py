@@ -52,7 +52,7 @@ def stage(destination: Path, refresh: bool = False) -> None:
     version = f"{sys.version_info.major}{sys.version_info.minor}"
     # This isolates the runtime from registry Python installs, user-site and PYTHONPATH.
     (runtime / f"python{version}._pth").write_text(".\nLib\nDLLs\nLib\\site-packages\n..\\app\nimport site\n", encoding="utf-8")
-    manifest = {"product": "CitadelLocalAssistant", "version": "0.3.0", "python": sys.version,
+    manifest = {"product": "CitadelLocalAssistant", "version": "0.4.0", "python": sys.version,
                 "data_dir_name": "LocalAssistant", "mutex_name": "CitadelLocalAssistant", "format": 1}
     (destination / "citadel.install.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     packages = sorted({f"{item.metadata['Name']}=={item.version}" for item in importlib.metadata.distributions(path=[str(site)]) if item.metadata.get("Name") != "local-assistant"})

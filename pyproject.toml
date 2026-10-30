@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-assistant"
-version = "0.3.0"
+version = "0.4.0"
 description = "Локальное ядро персонального голосового помощника"
 requires-python = ">=3.12"
 dependencies = [
@@ -27,3 +27,6 @@ voice = [
 
 [tool.setuptools.packages.find]
 include = ["assistant*"]
+
+[tool.setuptools.package-data]
+assistant = ["*.ps1"]

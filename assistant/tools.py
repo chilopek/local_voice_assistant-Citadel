@@ -74,7 +74,10 @@ def run_powershell(command: str) -> dict[str, Any]:
 
 
 def launch_program(program: str, arguments: list[str] | None = None) -> dict[str, Any]:
-    process = subprocess.Popen([program, *(arguments or [])], cwd=WORKSPACE, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    if sys.platform == "win32" and os.environ.get("CITADEL_WORKER_JOB") == "1":
+        flags |= subprocess.CREATE_BREAKAWAY_FROM_JOB
+    process = subprocess.Popen([program, *(arguments or [])], cwd=WORKSPACE, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
     return {"program": program, "pid": process.pid}
 
 
@@ -205,6 +208,7 @@ def _schema(name: str, description: str, properties: dict, required: list[str] |
 
 from .web_tools import search_web, fetch_url
 from .desktop import desktop_snapshot, desktop_action, take_screenshot
+from .context_tools import read_screen, get_location
 
 TOOL_FUNCTIONS.update({name: function for name, function in {
     "get_environment": get_environment, "search_web": search_web, "fetch_url": fetch_url,
@@ -212,11 +216,14 @@ TOOL_FUNCTIONS.update({name: function for name, function in {
     "browser_open": browser_open, "browser_snapshot": browser_snapshot, "browser_action": browser_action,
     "desktop_snapshot": desktop_snapshot, "desktop_action": desktop_action, "take_screenshot": take_screenshot,
     "update_plan": update_plan,
+    "read_screen": read_screen, "get_location": get_location,
 }.items()})
 
 _str = {"type": "string"}
 _int = {"type": "integer"}
 TOOL_SCHEMAS.extend([
+    _schema("read_screen", "Посмотреть текущий экран: снимок, распознанный OCR текст и открытые окна. Используй для вопросов что на экране. Картинки понимает только модель с vision.", {}),
+    _schema("get_location", "Определить примерный город устройства по IP для погоды и местных запросов. VPN может искажать город; это не GPS. Если город не найден, спроси пользователя.", {}),
     _schema("get_environment", "Получить ОС, рабочие папки, текущее время и возможности компьютера.", {}),
     _schema("search_web", "Искать любую актуальную информацию в интернете. Открывай найденные URL через fetch_url для проверки фактов.", {"query": _str, "max_results": _int}, ["query"]),
     _schema("fetch_url", "Читать HTTP/HTTPS URL, API, JSON, XML, HTML порциями до 3500 символов. Для продолжения передай start=next_start. Если нужен JavaScript, используй browser_open.", {"url": _str, "max_chars": _int, "start": _int}, ["url"]),

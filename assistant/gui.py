@@ -2,24 +2,22 @@ from __future__ import annotations
 
 import json
 import queue
-import re
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
 
-from .app import SYSTEM_PROMPT, run_turn
-from .config import MODEL, OLLAMA_URL, PROJECT_ROOT, THINK, VOICE_ENABLED, WORKSPACE
+from .app import SYSTEM_PROMPT
+from .config import MODEL, PROJECT_ROOT, THINK, VOICE_ENABLED, WORKSPACE
 from .memory import Memory
-from .ollama_client import OllamaClient, OllamaError
-from .voice import VoiceError, VoiceSession
+from .session import SessionProcess
 from .paths import installed_uninstaller
 from .uninstall import begin_uninstall
 
 WAKE_WORD = "цитадель"
 HOTKEY = "Ctrl+Alt+C"
-MODE_LABELS = {"wake": f"Ключевое слово «{WAKE_WORD}»", "always": "Всегда слушать", "push": "Push-to-talk"}
+MODE_LABELS = {"wake": f"После слова «{WAKE_WORD}»", "always": "Все голосовые команды"}
 BG, PANEL, SIDEBAR = "#111318", "#191c23", "#14171d"
 TEXT, MUTED, ACCENT = "#e8eaf0", "#929aaa", "#a9c7a5"
 
@@ -34,18 +32,17 @@ class AssistantGUI:
         root.minsize(900, 600)
         root.configure(bg=BG)
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
-        self.client = OllamaClient(OLLAMA_URL, MODEL)
         WORKSPACE.mkdir(parents=True, exist_ok=True)
         self.memory = Memory(PROJECT_ROOT / "data" / "memory.sqlite3")
         self.messages: list[dict[str, Any]] = self._initial_messages()
-        self.voice = VoiceSession()
         self.stop_event: threading.Event | None = None
         self.cancel_event = threading.Event()
         self.closed = threading.Event()
         self.speech_enabled = threading.Event()
-        self.worker: threading.Thread | None = None
+        self.worker: SessionProcess | None = None
+        self._session_id: str | None = None
         self.hotkey_listener: Any | None = None
-        self.mode = "wake" if VOICE_ENABLED else "push"
+        self.mode = "wake"
         self.busy = False
         self.listening = False
         self._session_error = False
@@ -73,6 +70,8 @@ class AssistantGUI:
             self.speech_enabled.set()
         else:
             self.speech_enabled.clear()
+        if self.worker:
+            self.worker.send({"command": "speech", "enabled": self.speak_var.get()})
 
     def _build_style(self) -> None:
         style = ttk.Style(self.root)
@@ -237,72 +236,36 @@ class AssistantGUI:
     def _start_listening(self) -> None:
         if not self._reserve_session(listening=True):
             return
-        self.stop_event = threading.Event()
         mode = self._mode_key()
-        self.worker = threading.Thread(target=self._voice_worker, args=(mode, self.stop_event, self.cancel_event), daemon=True)
-        self.worker.start()
-        self.listen_button.configure(text="Завершить запись" if mode == "push" else "Выключить микрофон")
+        self._start_process(mode)
+        self.listen_button.configure(text="Выключить микрофон")
         self.status_var.set(f"Слушаю: {WAKE_WORD}" if mode == "wake" else "Слушаю...")
 
     def _stop_listening(self) -> None:
-        # Stopping push-to-talk recording must still transcribe and answer it.
-        if self.stop_event:
-            self.stop_event.set()
-        self.listen_button.configure(state="disabled")
-        self.status_var.set("Завершаю запись и текущий ответ...")
+        self._stop_task()
 
     def _stop_task(self) -> None:
         if not self.busy:
             return
         self.cancel_event.set()
-        if self.stop_event:
-            self.stop_event.set()
+        worker, self.worker = self.worker, None
+        # Invalidate queued events BEFORE killing. Late results cannot touch the new task.
+        self._session_id = None
         self._resolve_confirmation(False)
-        self.stop_button.configure(state="disabled")
-        self.listen_button.configure(state="disabled")
-        self.status_var.set("Останавливаю... Ожидаю завершения текущей операции")
-        self._log_activity("Запрошена остановка", "Новые действия отменены. Ожидаю завершения текущей операции.")
+        if worker:
+            worker.stop()
+        self._finish_session(self.cancel_event)
+        self._log_activity("Задача остановлена", "Выполнение и озвучка прерваны. Можно отправить новую задачу.")
 
-    def _voice_worker(self, mode: str, stop_event: threading.Event, cancel: threading.Event) -> None:
-        try:
-            {"wake": self._wake_loop, "always": self._always_loop, "push": self._push_once}[mode](stop_event)
-        except Exception as error:
-            if not cancel.is_set():
-                self.events.put(("error", str(error)))
-        finally:
-            self.events.put(("session_done", cancel))
-
-    def _push_once(self, stop_event: threading.Event) -> None:
-        text = self.voice.capture_until_stop(stop_event)
-        if text and not self.cancel_event.is_set():
-            self._process_voice_text(text, "push")
-
-    def _wake_loop(self, stop_event: threading.Event) -> None:
-        while not stop_event.is_set() and not self.cancel_event.is_set():
-            text = self.voice.capture_utterance(stop_event)
-            if not text or stop_event.is_set() or self.cancel_event.is_set():
-                continue
-            if not re.search(rf"\b{re.escape(WAKE_WORD)}\b", text.lower().replace("ё", "е")):
-                continue
-            command = re.sub(rf"\b{re.escape(WAKE_WORD)}\b[:,.!]?\s*", "", text,
-                             count=1, flags=re.IGNORECASE).strip()
-            if command:
-                self._process_voice_text(command, "wake")
-            else:
-                self.events.put(("status", "Ключевое слово услышано, слушаю команду"))
-                self.voice.speak("Слушаю.")
-
-    def _always_loop(self, stop_event: threading.Event) -> None:
-        while not stop_event.is_set() and not self.cancel_event.is_set():
-            text = self.voice.capture_utterance(stop_event)
-            if text and not stop_event.is_set() and not self.cancel_event.is_set():
-                self._process_voice_text(text, "always")
-
-    def _process_voice_text(self, text: str, _mode: str) -> None:
-        self.events.put(("user", text))
-        self._answer_worker(text)
-        if not self.cancel_event.is_set() and self.stop_event and not self.stop_event.is_set():
-            self.events.put(("status", "Слушаю..."))
+    def _start_process(self, mode: str, text: str = "") -> None:
+        payload = {"mode": mode, "text": text, "messages": self.messages, "speak": self.speak_var.get()}
+        if self.worker and not self.worker.stopped.is_set() and self.worker.process and self.worker.process.poll() is None:
+            self._session_id = self.worker.id
+            self.worker.send({"command": "new_task", "payload": payload})
+            return
+        worker = SessionProcess(lambda sid, event, data: self.events.put(("worker", (sid, event, data))))
+        self.worker, self._session_id = worker, worker.id
+        worker.start(payload)
 
     def _send_text(self) -> None:
         text = self.entry.get().strip()
@@ -313,52 +276,10 @@ class AssistantGUI:
         self.entry.delete(0, "end")
         self.entry.configure(state="disabled")
         self._append_message("Вы", text)
-        self.worker = threading.Thread(target=self._text_worker, args=(text, self.cancel_event), daemon=True)
-        self.worker.start()
-
-    def _text_worker(self, text: str, cancel: threading.Event) -> None:
-        try:
-            self._answer_worker(text)
-        finally:
-            self.events.put(("session_done", cancel))
-
-    def _answer_worker(self, text: str) -> None:
-        cancel = self.cancel_event
-        self.events.put(("status", "Обрабатываю задачу..."))
-        try:
-            answer = run_turn(self.client, self.memory, self.messages, text,
-                              confirm=self._confirm_action, on_event=self._on_agent_event, cancel_event=cancel)
-            if not cancel.is_set():
-                self.events.put(("assistant", answer))
-                if self.speech_enabled.is_set():
-                    self.events.put(("status", "Озвучиваю ответ..."))
-                    self.voice.speak(answer)
-        except VoiceError as error:
-            self.events.put(("error", f"Голосовой вывод: {error}"))
-        except OllamaError as error:
-            if not cancel.is_set():
-                self.events.put(("error", f"Ollama: {error}"))
-        except Exception as error:
-            if not cancel.is_set():
-                self.events.put(("error", str(error)))
-
-    def _on_agent_event(self, event: dict[str, Any]) -> None:
-        self.events.put(("agent", dict(event)))
-
-    def _confirm_action(self, name: str, arguments: dict[str, Any]) -> bool:
-        cancel = self.cancel_event
-        if cancel.is_set() or self.closed.is_set():
-            return False
-        request = {"name": name, "arguments": arguments, "done": threading.Event(), "answer": False, "cancel": cancel}
-        self.events.put(("confirm", request))
-        while not request["done"].wait(0.1):
-            if cancel.is_set() or self.closed.is_set():
-                return False
-        return bool(request["answer"]) and not cancel.is_set() and not self.closed.is_set()
+        self._start_process("task", text)
 
     def _show_confirmation(self, request: dict[str, Any]) -> None:
-        if request["cancel"].is_set() or self.closed.is_set():
-            request["done"].set()
+        if self.closed.is_set() or self.cancel_event.is_set():
             return
         self._pending_confirmation = request
         window = self._confirmation_window = tk.Toplevel(self.root)
@@ -395,9 +316,10 @@ class AssistantGUI:
             self._confirmation_window.destroy()
             self._confirmation_window = None
         if request is not None:
-            request["answer"] = answer and not request["cancel"].is_set()
-            request["done"].set()
-            self._log_activity("Разрешено" if request["answer"] else "Отклонено", str(request["name"]))
+            allowed = answer and not self.cancel_event.is_set()
+            if self.worker:
+                self.worker.send({"command": "confirm", "allowed": allowed})
+            self._log_activity("Разрешено" if allowed else "Отклонено", str(request["name"]))
 
     def _clear_dialog(self) -> None:
         if self.busy:
@@ -461,11 +383,14 @@ class AssistantGUI:
     def _set_status(self, text: str) -> None:
         self.events.put(("status", text))
 
-    def _finish_session(self, cancel: threading.Event) -> None:
+    def _finish_session(self, cancel: threading.Event, *, keep_worker: bool = False) -> None:
         if cancel is not self.cancel_event:
             return
         self.busy, self.listening = False, False
-        self.worker, self.stop_event = None, None
+        self._session_id = None
+        if not keep_worker:
+            self.worker = None
+        self.stop_event = None
         self._resolve_confirmation(False)
         self.entry.configure(state="normal")
         self.send_button.configure(state="normal")
@@ -480,7 +405,7 @@ class AssistantGUI:
     def _drain_events(self) -> None:
         if self.closed.is_set():
             return
-        if self._pending_confirmation and self._pending_confirmation["cancel"].is_set():
+        if self._pending_confirmation and self.cancel_event.is_set():
             self._resolve_confirmation(False)
         # Bound each batch so Stop remains responsive under heavy tool traffic.
         for _ in range(100):
@@ -488,6 +413,18 @@ class AssistantGUI:
                 event, payload = self.events.get_nowait()
             except queue.Empty:
                 break
+            if event == "worker":
+                sid, event, payload = payload
+                if sid != self._session_id:
+                    continue
+                if event == "messages":
+                    self.messages = payload
+                    continue
+                if event == "task_done":
+                    self._finish_session(self.cancel_event, keep_worker=True)
+                    continue
+                if event == "session_done":
+                    payload = self.cancel_event
             if event == "user":
                 self._append_message("Вы", str(payload))
             elif event == "assistant":
@@ -513,6 +450,10 @@ class AssistantGUI:
     def close(self) -> None:
         self.closed.set()
         self.cancel_event.set()
+        self._session_id = None
+        if self.worker:
+            self.worker.stop()
+            self.worker = None
         if self.stop_event:
             self.stop_event.set()
         self._resolve_confirmation(False)

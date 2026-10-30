@@ -59,6 +59,10 @@ with tempfile.TemporaryDirectory(prefix="citadel-native-integration-") as folder
     run([str(install / "Citadel.exe"), "--check"], env=env)
     python = install / "runtime/python.exe"
     run([str(python), "-B", "-c", "import tkinter,torch,faster_whisper,playwright; from assistant.paths import installed_uninstaller; assert installed_uninstaller() is not None"], env=env)
+    # Exercise Stop, real child pipes/job cleanup and subsequent tasks using the
+    # installed private runtime, including under poisoned system Python settings.
+    run([str(python), "-B", "-X", "utf8", "-m", "unittest", "discover", "-s", str(Path(__file__).resolve().parent), "-p", "test_sessions.py", "-v"], env=env)
+    assert (install / "app/assistant/screen_ocr.ps1").is_file()
     assert (data / ".citadel-data-root").is_file()
     document = data / "workspace/keep-document.txt"
     document.parent.mkdir(parents=True, exist_ok=True)
