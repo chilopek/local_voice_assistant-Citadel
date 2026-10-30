@@ -44,7 +44,7 @@ class SetupConfigTests(unittest.TestCase):
             (root / "assistant.local.json").write_text('{"model":"legacy-model","voice":true}', encoding="utf-8")
             updated = self.configure(root)
             self.assertEqual(updated["model"], "legacy-model")
-            self.assertEqual(updated["workspace"], str(root))
+            self.assertEqual(Path(updated["workspace"]).resolve(), root.resolve())
 
 
 if __name__ == "__main__":
