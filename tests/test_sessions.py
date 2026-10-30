@@ -88,9 +88,10 @@ class SessionTests(unittest.TestCase):
     def test_stop_aborts_a_real_blocked_http_request_and_gui_accepts_next_task(self):
         # Exercise real Tk callbacks, child process, OS pipes and Windows job. No Ollama needed.
         entered, release = threading.Event(), threading.Event()
+        requests = []
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
-                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                requests.append(json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)))))
                 entered.set()
                 release.wait(15)
                 try:
@@ -149,6 +150,9 @@ class SessionTests(unittest.TestCase):
                 self.assertFalse(app.busy)
                 self.assertIs(app.worker, warm, "successful tasks should preserve browser and voice caches")
                 self.assertIsNone(warm.process.poll())
+                last_dialogue = requests[-1]["messages"]
+                self.assertTrue(any(m.get("role") == "user" and "скажи привет снова" in m.get("content", "") for m in last_dialogue))
+                self.assertTrue(any(m.get("role") == "assistant" and "проверенный ответ" in m.get("content", "") for m in last_dialogue))
                 old.process.wait(timeout=3)
         finally:
             release.set()
@@ -165,6 +169,45 @@ class SessionTests(unittest.TestCase):
             time.sleep(.01)
         self.assertIsNotNone(session.process)
         session.process.wait(timeout=5)
+
+    def test_microphone_meter_ignores_old_sessions_and_resets_on_stop(self):
+        import tkinter as tk
+        from assistant.gui import AssistantGUI
+        root = tk.Tk()
+        root.withdraw()
+        app = AssistantGUI(root, enable_hotkey=False)
+        try:
+            self.assertTrue(app._reserve_session(listening=True))
+            app._session_id = "current"
+            app.events.put(("worker", ("current", "mic_level", {"active": True, "level": .7, "dbfs": -18, "clipping": False})))
+            root.after_cancel(app._poll_id)
+            app._drain_events()
+            self.assertIn("Есть звук", app.mic_level_var.get())
+            self.assertTrue(any(app.mic_meter.itemcget(item, "fill") != "#2b313b" for item in app._mic_segments))
+            app._stop_task()
+            app.events.put(("worker", ("current", "mic_level", {"active": True, "level": 1, "dbfs": 0})))
+            root.after_cancel(app._poll_id)
+            app._drain_events()
+            self.assertEqual(app.mic_level_var.get(), "Микрофон выключен")
+            self.assertTrue(all(app.mic_meter.itemcget(item, "fill") == "#2b313b" for item in app._mic_segments))
+        finally:
+            app.close()
+
+    def test_voice_controls_fit_minimum_window_size(self):
+        import tkinter as tk
+        from assistant.gui import AssistantGUI
+        root = tk.Tk()
+        app = AssistantGUI(root, enable_hotkey=False)
+        try:
+            root.geometry("900x600")
+            root.update()
+            root.update_idletasks()
+            bottom = root.winfo_rooty() + root.winfo_height()
+            for control in (app.mode_box, app.listen_button, app.mic_meter, app.uninstall_button):
+                self.assertGreater(control.winfo_height(), 5)
+                self.assertLessEqual(control.winfo_rooty() + control.winfo_height(), bottom - 8)
+        finally:
+            app.close()
 
 
 if __name__ == "__main__":

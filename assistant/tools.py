@@ -7,6 +7,8 @@ import inspect
 import platform
 import subprocess
 import sys
+import webbrowser
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any, Callable
 
@@ -73,12 +75,99 @@ def run_powershell(command: str) -> dict[str, Any]:
     }
 
 
+def _http_url(url: str) -> bool:
+    if not isinstance(url, str) or any(c.isspace() or ord(c) < 32 for c in url) or "\\" in url:
+        return False
+    try:
+        parsed = urlsplit(url)
+        return parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname) and parsed.port != 0
+    except ValueError:
+        return False
+
+
+def open_url(url: str) -> dict[str, Any]:
+    """Ask the OS default browser to open a URL; this does not read the page."""
+    if not _http_url(url):
+        raise ValueError("Ожидается полный HTTP/HTTPS URL.")
+    if sys.platform == "win32":
+        os.startfile(url)
+        accepted = True
+    else:
+        accepted = bool(webbrowser.open(url))
+    return {"url": url, "launched": accepted, "request_accepted": accepted, "ok": accepted}
+
+
+def _trusted_programs() -> dict[str, tuple[str, list[Path]]]:
+    """Enumerate OS/install locations only, never PATH or the working directory."""
+    windows = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    programs = {
+        name: (kind, [windows / relative]) for name, kind, relative in (
+            ("calc", "gui", "System32/calc.exe"),
+            ("notepad", "gui", "System32/notepad.exe"),
+            ("mspaint", "gui", "System32/mspaint.exe"),
+            ("explorer", "explorer", "explorer.exe"),
+        )
+    }
+    for name, relative in (("chrome", "Google/Chrome/Application/chrome.exe"),
+                           ("msedge", "Microsoft/Edge/Application/msedge.exe"),
+                           ("firefox", "Mozilla Firefox/firefox.exe")):
+        roots = [os.environ.get(key) for key in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
+        candidates = [Path(root) / relative for root in roots if root]
+        programs[name] = ("browser", candidates)
+    return programs
+
+
+def _resolve_launch(program: str) -> tuple[str, str | None]:
+    if not isinstance(program, str) or not program.strip():
+        raise ValueError("Укажи программу.")
+    if sys.platform != "win32":
+        return program, None
+    aliases = {"calculator": "calc", "калькулятор": "calc", "блокнот": "notepad",
+               "paint": "mspaint", "проводник": "explorer", "chrome": "chrome",
+               "хром": "chrome", "google chrome": "chrome", "edge": "msedge"}
+    bare = not any(c in program for c in "\\/:")
+    name = program.lower().removesuffix(".exe") if bare else Path(program).stem.lower()
+    name = aliases.get(name, name)
+    entry = _trusted_programs().get(name)
+    if not entry:
+        return program, None
+    kind, candidates = entry
+    # An explicit path must itself match a trusted installation path.
+    if not bare:
+        candidates = [p for p in candidates if p.absolute() == Path(program).absolute()]
+        if not candidates:
+            return program, None
+    for candidate in candidates:
+        if candidate.is_file() and candidate.resolve() == candidate.absolute():
+            return str(candidate.resolve()), kind
+    raise FileNotFoundError(f"Программа {program} не найдена в доверенных установленных расположениях. Установка не выполнялась.")
+
+
+def _safe_launch_arguments(kind: str | None, arguments: Any) -> bool:
+    if arguments is None:
+        arguments = []
+    if not isinstance(arguments, list) or not all(isinstance(a, str) for a in arguments):
+        return False
+    if kind is None:
+        return False
+    if not arguments:
+        return True
+    if kind == "browser":
+        return all(_http_url(a) for a in arguments)
+    if kind == "explorer" and len(arguments) == 1:
+        # Only existing folders, never executable files or Explorer switches.
+        folder = Path(arguments[0])
+        return not arguments[0].startswith(("/", "-")) and folder.is_absolute() and folder.is_dir()
+    return False
+
+
 def launch_program(program: str, arguments: list[str] | None = None) -> dict[str, Any]:
+    executable, _ = _resolve_launch(program)
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     if sys.platform == "win32" and os.environ.get("CITADEL_WORKER_JOB") == "1":
         flags |= subprocess.CREATE_BREAKAWAY_FROM_JOB
-    process = subprocess.Popen([program, *(arguments or [])], cwd=WORKSPACE, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
-    return {"program": program, "pid": process.pid}
+    process = subprocess.Popen([executable, *(arguments or [])], cwd=WORKSPACE, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+    return {"program": executable, "pid": process.pid, "launched": True, "request_accepted": True}
 
 
 TOOL_FUNCTIONS: dict[str, Callable[..., Any]] = {
@@ -88,6 +177,7 @@ TOOL_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "write_file": write_file,
     "run_powershell": run_powershell,
     "launch_program": launch_program,
+    "open_url": open_url,
 }
 
 TOOL_SCHEMAS = [
@@ -153,7 +243,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "launch_program",
-            "description": "Запустить программу Windows для задачи пользователя; затем проверь окно через desktop_snapshot.",
+            "description": "Запустить установленную программу Windows (например chrome или calc). Доверенные обычные запуски не требуют подтверждения. Если программа отсутствует, сообщи ошибку; не устанавливай её без поручения.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -222,6 +312,7 @@ TOOL_FUNCTIONS.update({name: function for name, function in {
 _str = {"type": "string"}
 _int = {"type": "integer"}
 TOOL_SCHEMAS.extend([
+    _schema("open_url", "Открыть HTTP/HTTPS URL в браузере ОС по умолчанию. Возвращает только принятие запроса запуска, не читает страницу. Для обычного открыть сайт достаточно одного вызова.", {"url": _str}, ["url"]),
     _schema("read_screen", "Посмотреть текущий экран: снимок, распознанный OCR текст и открытые окна. Используй для вопросов что на экране. Картинки понимает только модель с vision.", {}),
     _schema("get_location", "Определить примерный город устройства по IP для погоды и местных запросов. VPN может искажать город; это не GPS. Если город не найден, спроси пользователя.", {}),
     _schema("get_environment", "Получить ОС, рабочие папки, текущее время и возможности компьютера.", {}),
@@ -242,6 +333,9 @@ CONFIRMATION_REQUIRED = {"run_powershell", "run_python", "launch_program", "down
 
 
 def needs_confirmation(name: str, arguments: dict[str, Any]) -> bool:
+    if name == "launch_program":
+        _, kind = _resolve_launch(arguments.get("program", ""))
+        return not _safe_launch_arguments(kind, arguments.get("arguments"))
     if name in CONFIRMATION_REQUIRED:
         return True
     if name == "browser_action":

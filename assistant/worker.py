@@ -55,6 +55,7 @@ def main() -> int:
         from .memory import Memory
         from .ollama_client import OllamaClient
         from .voice import VoiceSession
+        from .speech import concise_speech
         client = OllamaClient(OLLAMA_URL, MODEL)
         memory = Memory(PROJECT_ROOT / "data" / "memory.sqlite3")
         messages = payload["messages"]
@@ -83,7 +84,8 @@ def main() -> int:
                     pass
             cancel.set()
         threading.Thread(target=commands, daemon=True).start()
-        voice = VoiceSession(on_status=lambda text: emit("status", text))
+        voice = VoiceSession(on_status=lambda text: emit("status", text),
+                             on_level=lambda level: emit("mic_level", level))
         def confirm(name: str, arguments: dict) -> bool:
             reply["allowed"] = False
             confirmation.clear()
@@ -107,7 +109,7 @@ def main() -> int:
                     if not speech["enabled"]:
                         speech_cancel.set()
                     emit("status", "Озвучиваю ответ…")
-                    voice.speak(result, cancel_event=speech_cancel)
+                    voice.speak(concise_speech(result), cancel_event=speech_cancel)
                 except Exception as error:
                     emit("error", f"Озвучка: {error}")
         while not cancel.is_set():
@@ -118,7 +120,7 @@ def main() -> int:
                     answer(payload["text"])
                 else:
                     gate = WakeGate(payload["mode"])
-                    voice.prepare()
+                    voice.prepare(speech=speech["enabled"])
                     while not cancel.is_set():
                         emit("status", "Слушаю команду…" if gate.mode == "always" or time.monotonic() < gate.armed_until else "Слушаю слово «цитадель»…")
                         heard = voice.capture_utterance(cancel)

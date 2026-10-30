@@ -16,6 +16,7 @@ import time
 import urllib.request
 
 from assistant.paths import DATA_ROOT, ensure_data_layout
+from assistant.voice_assets import prepare_voice_assets
 
 
 def choose_model(mode: str) -> str:
@@ -120,6 +121,8 @@ def main() -> int:
     parser.add_argument("--voice", choices=["on", "off"], default="on")
     parser.add_argument("--replace-config", action="store_true")
     parser.add_argument("--skip-download", action="store_true")
+    parser.add_argument("--skip-agent-assets", action="store_true",
+                        help="Skip Ollama and browser preparation; still prepare enabled voice assets")
     args = parser.parse_args()
     ensure_data_layout()
     log_path = DATA_ROOT / "setup-runtime.log"
@@ -139,9 +142,24 @@ def main() -> int:
             path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         logging.info("Configuration ready; model=%s, voice=%s", config["model"], config.get("voice"))
         if not args.skip_download:
-            prepare_model(config["model"])
-            from assistant.browser import main as prepare_browser
-            prepare_browser()
+            if config.get("voice", False):
+                prepare_voice_assets(config)
+                # Persist a validated fallback so later installs/runtime skip the
+                # unavailable primary. Preparation failures never write this choice.
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                                 suffix=".json.part", delete=False) as output:
+                    pending_config = Path(output.name)
+                    json.dump(config, output, ensure_ascii=False, indent=2)
+                try:
+                    pending_config.replace(path)
+                finally:
+                    pending_config.unlink(missing_ok=True)
+            if not args.skip_agent_assets:
+                prepare_model(config["model"])
+                from assistant.browser import main as prepare_browser
+                prepare_browser()
+        else:
+            logging.info("[voice:skip] --skip-download: all asset preparation skipped")
         logging.info("Setup completed")
         return 0
     except Exception:

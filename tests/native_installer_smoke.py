@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix="citadel-native-integration-") as folder
     assert (install / "unins000.exe").is_file()
     run([str(install / "Citadel.exe"), "--check"], env=env)
     python = install / "runtime/python.exe"
-    run([str(python), "-B", "-c", "import tkinter,torch,faster_whisper,playwright; from assistant.paths import installed_uninstaller; assert installed_uninstaller() is not None"], env=env)
+    run([str(python), "-B", "-c", "import tkinter,torch,faster_whisper,playwright,piper; from assistant.paths import installed_uninstaller; assert installed_uninstaller() is not None"], env=env)
     # Exercise Stop, real child pipes/job cleanup and subsequent tasks using the
     # installed private runtime, including under poisoned system Python settings.
     run([str(python), "-B", "-X", "utf8", "-m", "unittest", "discover", "-s", str(Path(__file__).resolve().parent), "-p", "test_sessions.py", "-v"], env=env)

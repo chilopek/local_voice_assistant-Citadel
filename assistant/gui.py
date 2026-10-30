@@ -115,10 +115,8 @@ class AssistantGUI:
         self.new_button = ttk.Button(sidebar, text="＋  Новая задача", command=self._clear_dialog)
         self.new_button.pack(fill="x")
         self._label(sidebar, "ВОЗМОЖНОСТИ", size=8).pack(anchor="w", pady=(22, 12))
-        for title, detail in (("◎  Браузер", "Страницы и веб-задачи"), ("▤  Файлы", "Поиск и работа с данными"),
-                              ("⊞  Windows", "Приложения и действия")):
-            self._label(sidebar, title, color=TEXT, bold=True).pack(anchor="w", pady=(7, 2))
-            self._label(sidebar, detail, size=9).pack(anchor="w", pady=(0, 6))
+        self._label(sidebar, "Интернет · Файлы", color=TEXT, size=10).pack(anchor="w", pady=(0, 6))
+        self._label(sidebar, "Приложения · Экран", color=TEXT, size=10).pack(anchor="w")
         bottom = tk.Frame(sidebar, bg=SIDEBAR)
         bottom.pack(side="bottom", fill="x")
         self._label(bottom, "Локально · Ollama", color=ACCENT, size=9).pack(anchor="w", pady=(8, 3))
@@ -130,7 +128,14 @@ class AssistantGUI:
         self.mode_box.bind("<<ComboboxSelected>>", self._mode_changed)
         self.listen_button = ttk.Button(bottom, text="Включить микрофон", command=self._toggle_listening)
         self.listen_button.pack(fill="x", pady=(10, 2))
-        ttk.Checkbutton(bottom, text="Озвучивать ответы", variable=self.speak_var).pack(anchor="w")
+        self.mic_level_var = tk.StringVar(value="Микрофон выключен")
+        self.mic_meter = tk.Canvas(bottom, width=184, height=14, bg=SIDEBAR, highlightthickness=0)
+        self.mic_meter.pack(fill="x", pady=(10, 3))
+        self._mic_segments = [self.mic_meter.create_rectangle(2 + i * 9, 2, 8 + i * 9, 12,
+                              fill="#2b313b", outline="") for i in range(20)]
+        tk.Label(bottom, textvariable=self.mic_level_var, bg=SIDEBAR, fg=MUTED,
+                 font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=(0, 3))
+        ttk.Checkbutton(bottom, text="Кратко озвучивать ответ", variable=self.speak_var).pack(anchor="w")
         self._label(bottom, HOTKEY + "  ·  микрофон", size=9).pack(anchor="w", pady=(2, 0))
         self.uninstall_button = ttk.Button(bottom, text="Удалить помощника…", command=self._uninstall,
                                            state="normal" if installed_uninstaller() else "disabled")
@@ -237,6 +242,7 @@ class AssistantGUI:
         if not self._reserve_session(listening=True):
             return
         mode = self._mode_key()
+        self.mic_level_var.set("Подготовка голоса…")
         self._start_process(mode)
         self.listen_button.configure(text="Выключить микрофон")
         self.status_var.set(f"Слушаю: {WAKE_WORD}" if mode == "wake" else "Слушаю...")
@@ -387,6 +393,7 @@ class AssistantGUI:
         if cancel is not self.cancel_event:
             return
         self.busy, self.listening = False, False
+        self._set_mic_level({"active": False})
         self._session_id = None
         if not keep_worker:
             self.worker = None
@@ -401,6 +408,20 @@ class AssistantGUI:
         self.status_var.set("Задача остановлена" if cancel.is_set() else
                             "Нужна проверка настроек" if self._session_error else "Готов к работе")
         self.entry.focus_set()
+
+    def _set_mic_level(self, payload: dict[str, Any]) -> None:
+        active = bool(payload.get("active")) and self.listening
+        level = max(0.0, min(1.0, float(payload.get("level", 0)))) if active else 0.0
+        for index, segment in enumerate(self._mic_segments):
+            color = ACCENT if index < 13 else "#d8bf79" if index < 17 else "#e68f87"
+            self.mic_meter.itemconfigure(segment, fill=color if active and level * 20 > index else "#2b313b")
+        if not active:
+            text = "Микрофон на паузе" if self.listening else "Микрофон выключен"
+        elif payload.get("clipping"):
+            text = "Перегрузка · говорите тише"
+        else:
+            text = ("Есть звук" if level > .12 else "Тишина · слушаю") + f" · {payload.get('dbfs', -96):.0f} дБ"
+        self.mic_level_var.set(text)
 
     def _drain_events(self) -> None:
         if self.closed.is_set():
@@ -441,6 +462,8 @@ class AssistantGUI:
                 self._toggle_listening()
             elif event == "agent":
                 self._agent_progress(payload)
+            elif event == "mic_level":
+                self._set_mic_level(payload)
             elif event == "confirm":
                 self._show_confirmation(payload)
             elif event == "session_done":

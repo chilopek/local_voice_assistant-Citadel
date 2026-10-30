@@ -27,8 +27,8 @@
 [Setup]
 AppId={#ProductId}
 AppName={#ProductName}
-AppVersion=0.4.0
-AppVerName={#ProductName} 0.4.0
+AppVersion=0.5.0
+AppVerName={#ProductName} 0.5
 DefaultDirName={localappdata}\Programs\{#ProductName}
 DisableDirPage=yes
 UsePreviousAppDir=no
@@ -77,7 +77,7 @@ Name: "{userdesktop}\{#ProductName}"; Filename: "{app}\Citadel.exe"; WorkingDir:
 Name: "{userprograms}\{#ProductName}"; Filename: "{app}\Citadel.exe"; WorkingDir: "{app}"; IconFilename: "{app}\app\assets\citadel.ico"
 
 [Tasks]
-Name: "runtimesetup"; Description: "Настроить Ollama (установить при необходимости), загрузить модель и голосовые ресурсы"
+Name: "runtimesetup"; Description: "Подготовить Ollama и языковую модель (голосовые модели подготавливаются отдельно)"
 
 [Code]
 const
@@ -152,7 +152,7 @@ begin
   ModelPage.CheckListBox.Height := VoiceBox.Top - ModelPage.CheckListBox.Top - ScaleY(8);
   VoiceBox.Left := 0;
   VoiceBox.Width := ModelPage.SurfaceWidth;
-  VoiceBox.Caption := 'Включить голос при применении выбранных настроек';
+  VoiceBox.Caption := 'Голосовой режим: установить распознавание и нейроголос';
   VoiceBox.Checked := VoiceArgument <> 'off';
   ModelPage.CheckListBox.OnClickCheck := @ModelChanged;
   ModelChanged(nil);
@@ -279,17 +279,13 @@ begin
     Log('АВТОНОМНЫЙ ТЕСТ УПАКОВКИ: настройка пропущена; Ollama не запускалась.');
     Exit;
   end;
-  if not WizardIsTaskSelected('runtimesetup') then
-  begin
-    Log('Пользователь отключил настройку: Ollama, модель и голос не настраивались.');
-    WizardForm.FinishedLabel.Caption := 'Файлы Citadel установлены. Настройка Ollama и модели не выбрана. Перед использованием Citadel настройте Ollama и загрузите модель.';
-    Exit;
-  end;
   Parameters := '-B -X utf8 -u ' + Quoted(ExpandConstant('{app}\app\assistant\setup_runtime.py')) +
     ' --model ' + GetModel('') + ' --voice ' + GetVoice;
   // Keep existing config by default. The helper must use its saved model/voice
   // for downloads when config exists and --replace-config is absent.
   if ModelPage.SelectedValueIndex <> 0 then Parameters := Parameters + ' --replace-config';
+  if not WizardIsTaskSelected('runtimesetup') then
+    Parameters := Parameters + ' --skip-agent-assets';
   WizardForm.StatusLabel.Caption := 'Настройка Ollama, модели и голоса. Это может занять несколько минут...';
   ResultCode := -1;
   // ExecAndLogOutput is the [Run] logoutput/runhidden/waituntilterminated
@@ -303,6 +299,8 @@ begin
   if not Started then
     RuntimeError('Не удалось запустить помощник на встроенном Python (' + IntToStr(ResultCode) + ').')
   else if ResultCode <> 0 then RuntimeError('Код завершения помощника: ' + IntToStr(ResultCode) + '.');
+  if not WizardIsTaskSelected('runtimesetup') then
+    WizardForm.FinishedLabel.Caption := 'Настройки сохранены; голосовые модели подготовлены, если голос включён. Подготовка Ollama и языковой модели отключена — настройте их перед выполнением задач.';
 end;
 
 function GetCustomSetupExitCode: Integer;

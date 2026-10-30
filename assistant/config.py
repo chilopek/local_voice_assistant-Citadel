@@ -32,6 +32,7 @@ VOICE_ENABLED = bool(
 )
 VOICE_STT_MODEL = os.environ.get("ASSISTANT_STT_MODEL", LOCAL_CONFIG.get("stt_model", "base"))
 VOICE_TTS_MODEL = os.environ.get("ASSISTANT_TTS_MODEL", LOCAL_CONFIG.get("tts_model", "v5_6_ru"))
+VOICE_TTS_ENGINE = os.environ.get("ASSISTANT_TTS_ENGINE", LOCAL_CONFIG.get("tts_engine", "silero"))
 VOICE_TTS_SPEAKER = os.environ.get("ASSISTANT_TTS_SPEAKER", LOCAL_CONFIG.get("tts_speaker", "aidar"))
 VOICE_SAMPLE_RATE = int(os.environ.get("ASSISTANT_VOICE_SAMPLE_RATE", str(LOCAL_CONFIG.get("voice_sample_rate", 16000))))
 VOICE_TTS_SAMPLE_RATE = int(os.environ.get("ASSISTANT_TTS_SAMPLE_RATE", str(LOCAL_CONFIG.get("tts_sample_rate", 48000))))

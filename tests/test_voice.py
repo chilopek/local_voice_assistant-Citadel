@@ -159,12 +159,13 @@ class RecognitionTests(unittest.TestCase):
         factory = Mock()
         factory.return_value.transcribe.return_value = ([SimpleNamespace(text=" команда ")], None)
         statuses = []
-        with patch.dict(sys.modules, faster_whisper=SimpleNamespace(WhisperModel=factory)):
+        with patch.dict(sys.modules, faster_whisper=SimpleNamespace(WhisperModel=factory)), patch.object(voice, "resolve_whisper_snapshot", return_value=Path("cached-model")):
             session = VoiceSession(on_status=statuses.append)
             self.assertEqual(session.transcribe_audio(pcm(1200)), "команда")
         self.assertEqual(factory.call_args.kwargs["compute_type"], "int8")
         call = factory.return_value.transcribe.call_args
         self.assertEqual(call.kwargs["beam_size"], 1)
+        self.assertIn("Цитадель", call.kwargs["initial_prompt"])
         self.assertEqual(str(call.args[0].dtype), "float32")
         self.assertAlmostEqual(float(call.args[0][0]), 1200 / 32768)
         self.assertTrue(any("Загрузка" in status for status in statuses))
@@ -392,13 +393,61 @@ class DownloadTests(unittest.TestCase):
 
     def test_load_tts_wraps_network_timeout_with_underlying_cause(self):
         torch = Mock()
-        session = VoiceSession()
+        session = VoiceSession(allow_download=True)
         with tempfile.TemporaryDirectory() as folder:
             torch.hub.get_dir.return_value = folder
             with patch.dict(sys.modules, torch=torch), patch.object(voice.importlib.util, "find_spec", return_value=None), patch.object(session, "_download_tts", side_effect=TimeoutError("read timed out")), self.assertLogs(voice.logger, level="ERROR"):
                 with self.assertRaisesRegex(VoiceError, "TimeoutError: read timed out"):
                     session._load_tts()
             torch.package.PackageImporter.assert_not_called()
+
+    def test_runtime_never_downloads_a_missing_silero_model(self):
+        torch = Mock()
+        session = VoiceSession()
+        with tempfile.TemporaryDirectory() as folder:
+            torch.hub.get_dir.return_value = folder
+            with patch.dict(sys.modules, torch=torch), patch.object(voice.importlib.util, "find_spec", return_value=None), patch.object(session, "_download_tts") as download, self.assertLogs(voice.logger, level="ERROR"):
+                with self.assertRaisesRegex(VoiceError, "Повторите установку"):
+                    session._load_tts()
+                download.assert_not_called()
+
+    def test_whisper_runtime_is_local_only_and_installer_can_download(self):
+        factory = Mock()
+        with patch.dict(sys.modules, faster_whisper=SimpleNamespace(WhisperModel=factory)), patch.object(voice, "resolve_whisper_snapshot", side_effect=lambda model, **kwargs: Path(model)) as resolve:
+            VoiceSession(stt_model="cached-model").prepare()
+            self.assertTrue(factory.call_args.kwargs["local_files_only"])
+            self.assertEqual(factory.call_args.args[0], "cached-model")
+            resolve.assert_called_with("cached-model", allow_download=False)
+            VoiceSession(allow_download=True, stt_model="installer-model").prepare()
+            self.assertTrue(factory.call_args.kwargs["local_files_only"])
+            resolve.assert_called_with("installer-model", allow_download=True)
+
+
+class MeterTests(unittest.TestCase):
+    def test_level_tracks_rms_clipping_and_resets_on_pause(self):
+        updates = []
+        session = VoiceSession(on_level=updates.append)
+        session._report_level(pcm(0), active=True, force=True)
+        session._report_level(pcm(2000), active=True, force=True)
+        session._report_level(pcm(32767), active=True, force=True)
+        session._report_level(active=False)
+        self.assertEqual(updates[0]["level"], 0)
+        self.assertGreater(updates[1]["level"], updates[0]["level"])
+        self.assertTrue(updates[2]["clipping"])
+        self.assertFalse(updates[-1]["active"])
+        self.assertEqual(updates[-1]["level"], 0)
+
+    def test_meter_is_throttled_and_capture_always_resets_it(self):
+        updates = []
+        session = VoiceSession(on_level=updates.append)
+        with patch.object(voice.time, "monotonic", return_value=10):
+            for _ in range(100):
+                session._report_level(pcm(1000), active=True)
+        self.assertEqual(len(updates), 1)
+        sd = microphone([pcm(40)] * 6 + [pcm(1500)] * 6 + [pcm(40)] * 14)
+        with patch.dict(sys.modules, sounddevice=sd):
+            session._capture_raw(threading.Event())
+        self.assertFalse(updates[-1]["active"])
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from array import array
 from collections import deque
+from contextlib import nullcontext
 import importlib.util
 import hashlib
 import logging
@@ -18,11 +19,13 @@ import urllib.request
 import wave
 from pathlib import Path
 from typing import Any, Callable
+from types import SimpleNamespace
 
 from .config import (
     VOICE_INPUT_DEVICE, VOICE_SAMPLE_RATE, VOICE_STT_MODEL, VOICE_TTS_MODEL,
-    VOICE_TTS_SPEAKER, VOICE_TTS_SAMPLE_RATE, VOICE_THREADS,
+    VOICE_TTS_SPEAKER, VOICE_TTS_SAMPLE_RATE, VOICE_THREADS, VOICE_TTS_ENGINE,
 )
+from .voice_assets import resolve_whisper_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -115,13 +118,24 @@ class VoiceSession:
     """
 
     def __init__(self, on_status: Callable[[str], None] | None = None, *,
-                 allow_sapi_fallback: bool = True) -> None:
+                 allow_sapi_fallback: bool = True, allow_download: bool = False,
+                 stt_model: str | None = None, tts_model: str | None = None,
+                 tts_speaker: str | None = None,
+                 tts_engine: str | None = None,
+                 on_level: Callable[[dict[str, Any]], None] | None = None) -> None:
         self._stt: Any | None = None
         self._tts: Any | None = None
         self._torch: Any | None = None
         self._tts_key: tuple[str, str] | None = None
         self._on_status = on_status
         self._allow_sapi_fallback = allow_sapi_fallback
+        self.allow_download = allow_download
+        self.stt_model = stt_model if stt_model is not None else VOICE_STT_MODEL
+        self.tts_model = tts_model if tts_model is not None else VOICE_TTS_MODEL
+        self.tts_speaker = tts_speaker if tts_speaker is not None else VOICE_TTS_SPEAKER
+        self.tts_engine = tts_engine if tts_engine is not None else VOICE_TTS_ENGINE
+        self._on_level = on_level
+        self._last_level_at = 0.0
         self._stop_event = threading.Event()
 
     def _status(self, message: str) -> None:
@@ -129,9 +143,28 @@ class VoiceSession:
         if self._on_status:
             self._on_status(message)
 
-    def prepare(self) -> None:
+    def _report_level(self, raw: bytes = b"", *, active: bool, force: bool = False) -> None:
+        if not self._on_level:
+            return
+        now = time.monotonic()
+        if active and not force and now - self._last_level_at < 0.08:
+            return
+        self._last_level_at = now
+        rms = self._audio_level(raw) if active else 0.0
+        dbfs = max(-96.0, 20 * math.log10(max(rms, 0.5) / 32768))
+        samples = array("h")
+        samples.frombytes(raw)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        self._on_level({"active": active, "level": max(0.0, min(1.0, (dbfs + 60) / 60)) if active else 0.0,
+                        "dbfs": round(dbfs, 1) if active else None,
+                        "clipping": any(abs(sample) >= 32700 for sample in samples) if active else False})
+
+    def prepare(self, *, speech: bool = False) -> None:
         """Warm recognition before opening the microphone, reporting load status."""
         self._load_stt()
+        if speech:
+            self._load_tts()
 
     def _load_stt(self) -> Any:
         if self._stt is not None:
@@ -139,16 +172,32 @@ class VoiceSession:
         self._status("Загрузка распознавания Whisper (CPU, int8)...")
         try:
             from faster_whisper import WhisperModel
-            self._stt = WhisperModel(VOICE_STT_MODEL, device="cpu", compute_type="int8",
-                                     cpu_threads=VOICE_THREADS)
+            snapshot = resolve_whisper_snapshot(self.stt_model, allow_download=self.allow_download)
+            self._stt = WhisperModel(str(snapshot), device="cpu", compute_type="int8",
+                                     cpu_threads=VOICE_THREADS, local_files_only=True)
             return self._stt
         except Exception as error:
-            raise _failure("Не удалось загрузить faster-whisper", error) from error
+            raise _failure("Whisper не готов. Повторите установку с подготовкой голоса", error) from error
 
     def _load_tts(self) -> tuple[Any, Any]:
+        if self.tts_engine == "piper":
+            try:
+                from .piper_voice import PiperBackend, get_piper_path
+                path = get_piper_path()
+                key = ("piper", str(path))
+                if self._tts is None or self._tts_key != key:
+                    self._status("Загрузка локального нейроголоса Piper…")
+                    self._tts = PiperBackend.load(path)
+                    self._torch = SimpleNamespace(inference_mode=nullcontext)
+                    self._tts_key = key
+                return self._tts, self._torch
+            except Exception as error:
+                raise _failure("Не удалось загрузить Piper. Повторите подготовку голоса в установщике", error) from error
+        if self.tts_engine != "silero":
+            raise VoiceError(f"Неизвестный движок голоса: {self.tts_engine}")
         # Avoid silero's wrapper: undeclared OmegaConf dependency and cwd writes.
         # Packaged ru models need only torch and their own declared dependencies.
-        key = ("ru", VOICE_TTS_MODEL)
+        key = ("ru", self.tts_model)
         if self._tts is not None and self._torch is not None and self._tts_key == key:
             return self._tts, self._torch
         self._status(f"Загрузка Silero TTS ({key[0]}/{key[1]}, CPU)...")
@@ -167,6 +216,8 @@ class VoiceSession:
                 if installed and installed.is_file():
                     source = installed
                 else:
+                    if not self.allow_download:
+                        raise FileNotFoundError("Модель Silero отсутствует. Повторите установку с подготовкой голоса; во время команды скачивание отключено.")
                     self._download_tts(
                         f"https://models.silero.ai/models/tts/{key[0]}/{cache.name}", cache)
             model = torch.package.PackageImporter(str(source)).load_pickle("tts_models", "model")
@@ -278,6 +329,7 @@ class VoiceSession:
             with sd.RawInputStream(samplerate=VOICE_SAMPLE_RATE,
                                    blocksize=max(1, VOICE_SAMPLE_RATE // 20), dtype="int16",
                                    channels=1, device=device, callback=callback):
+                self._report_level(active=True, force=True)
                 while not stop_event.is_set():
                     elapsed = time.monotonic() - started_at
                     if elapsed >= max_seconds or (not vad.started and elapsed >= start_timeout):
@@ -286,12 +338,15 @@ class VoiceSession:
                         chunk = chunks.get(timeout=0.05)
                     except queue.Empty:
                         continue
+                    self._report_level(chunk, active=True)
                     if vad.feed(chunk):
                         break
                     if vad.elapsed >= max_seconds or (not vad.started and vad.elapsed >= start_timeout):
                         break
         except Exception as error:
             raise _failure("Не удалось записать микрофон", error) from error
+        finally:
+            self._report_level(active=False, force=True)
         return b"" if stop_event.is_set() else vad.audio()
 
     def transcribe_audio(self, raw_audio: bytes, stop_event: threading.Event | None = None) -> str | None:
@@ -317,7 +372,8 @@ class VoiceSession:
             if stop_event is not None and stop_event.is_set():
                 return None
             segments, _ = model.transcribe(samples, language="ru", beam_size=1,
-                                           vad_filter=True, condition_on_previous_text=False)
+                                           vad_filter=True, condition_on_previous_text=False,
+                                           initial_prompt="Имя помощника: Цитадель.")
             parts = []
             for segment in segments:
                 if stop_event is not None and stop_event.is_set():
@@ -368,7 +424,7 @@ class VoiceSession:
 
     def _tts_settings(self, model: Any) -> tuple[str, int]:
         speakers = getattr(model, "speakers", None)
-        speaker = VOICE_TTS_SPEAKER or "aidar"
+        speaker = self.tts_speaker or "aidar"
         if speakers and speaker not in speakers:
             speaker = "aidar" if "aidar" in speakers else next(iter(speakers))
             self._status(f"Голос модели недоступен, выбран {speaker}")
@@ -450,7 +506,7 @@ class VoiceSession:
                 finally:
                     sd.stop()
         except Exception as error:
-            failure = _failure("Не удалось озвучить ответ Silero", error)
+            failure = _failure(f"Не удалось озвучить ответ {self.tts_engine.title()}", error)
             if self._cancelled(cancel_event):
                 return
             if self._allow_sapi_fallback and os.name == "nt":
