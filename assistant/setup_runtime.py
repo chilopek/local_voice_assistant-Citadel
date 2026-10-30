@@ -116,6 +116,9 @@ def prepare_model(model: str) -> None:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="auto")
     parser.add_argument("--voice", choices=["on", "off"], default="on")

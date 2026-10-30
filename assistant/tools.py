@@ -99,7 +99,7 @@ def open_url(url: str) -> dict[str, Any]:
 
 def _trusted_programs() -> dict[str, tuple[str, list[Path]]]:
     """Enumerate OS/install locations only, never PATH or the working directory."""
-    windows = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    windows = Path(os.environ.get("SystemRoot", r"C:\Windows")).resolve()
     programs = {
         name: (kind, [windows / relative]) for name, kind, relative in (
             ("calc", "gui", "System32/calc.exe"),
@@ -112,7 +112,7 @@ def _trusted_programs() -> dict[str, tuple[str, list[Path]]]:
                            ("msedge", "Microsoft/Edge/Application/msedge.exe"),
                            ("firefox", "Mozilla Firefox/firefox.exe")):
         roots = [os.environ.get(key) for key in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
-        candidates = [Path(root) / relative for root in roots if root]
+        candidates = [Path(root).resolve() / relative for root in roots if root]
         programs[name] = ("browser", candidates)
     return programs
 

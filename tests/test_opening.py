@@ -41,7 +41,7 @@ class OpeningTests(unittest.TestCase):
 
     def test_trusted_resolution_shared_by_confirmation_and_launch(self):
         with tempfile.TemporaryDirectory() as folder:
-            exe = Path(folder) / "System32/calc.exe"
+            exe = Path(folder).resolve() / "System32/calc.exe"
             exe.parent.mkdir()
             exe.touch()
             with patch.object(tools.sys, "platform", "win32"), \
@@ -59,7 +59,7 @@ class OpeningTests(unittest.TestCase):
 
     def test_browser_flags_and_explorer_files_still_confirm(self):
         with tempfile.TemporaryDirectory() as folder:
-            chrome, explorer = Path(folder) / "chrome.exe", Path(folder) / "explorer.exe"
+            chrome, explorer = Path(folder).resolve() / "chrome.exe", Path(folder).resolve() / "explorer.exe"
             chrome.touch()
             explorer.touch()
             with patch.object(tools.sys, "platform", "win32"), patch.object(tools, "_trusted_programs", return_value={
