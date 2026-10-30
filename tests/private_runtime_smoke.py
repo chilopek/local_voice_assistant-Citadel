@@ -23,4 +23,8 @@ with tempfile.TemporaryDirectory(prefix="citadel-private-runtime-") as folder:
             shutil.copy2(asset, target / asset.name)
         script = "from assistant.voice import VoiceSession; s=VoiceSession(tts_engine='piper',allow_sapi_fallback=False);m,_=s._load_tts();a=m.apply_tts(text='Голос готов.',speaker='irina',sample_rate=22050,put_accent=True,put_yo=True);assert a.size>2000;print('PASS: private runtime generates real Piper speech offline')"
         subprocess.run([str(runtime / "python.exe"), "-B", "-X", "utf8", "-c", script], env=env, check=True, timeout=60)
+        from assistant.voice_assets import resolve_whisper_snapshot
+        env["ASSISTANT_STT_MODEL"] = str(resolve_whisper_snapshot("base", allow_download=False))
+        env["ASSISTANT_TTS_ENGINE"] = "piper"
+        subprocess.run([str(runtime / "python.exe"), "-B", "-X", "utf8", str(tests / "live_voice_host_smoke.py")], env=env, check=True, timeout=150)
 print("PASS: private runtime cancels blocked work, accepts subsequent tasks, preserves warm workers and reads context", flush=True)

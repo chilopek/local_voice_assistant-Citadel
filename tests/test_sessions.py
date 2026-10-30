@@ -38,6 +38,31 @@ class WakeTests(unittest.TestCase):
 
 
 class SessionTests(unittest.TestCase):
+    def test_stop_preserves_the_ready_voice_host_and_unexpected_exit_does_not_lock_ui(self):
+        import tkinter as tk
+        from unittest.mock import Mock
+        from assistant.gui import AssistantGUI
+        root = tk.Tk()
+        root.withdraw()
+        app = AssistantGUI(root, enable_hotkey=False, warm_voice=False)
+        host = Mock(id="resident")
+        app.voice_host = host
+        app._voice_ready = app._voice_speech_ready = True
+        try:
+            app._reserve_session()
+            app._stop_task()
+            self.assertIs(app.voice_host, host)
+            host.stop.assert_not_called()
+            self.assertEqual(host.send.call_args.args[0]["command"], "cancel")
+            app._reserve_session()
+            app._agent_running = False
+            app._awaiting_speech = True
+            app._voice_event(host.id, "session_done", None)
+            self.assertFalse(app.busy)
+            self.assertFalse(app._awaiting_speech)
+        finally:
+            app.close()
+
     def test_commands_before_start_are_buffered_without_blocking_tk(self):
         from unittest.mock import Mock
         session = SessionProcess(lambda *_: None)

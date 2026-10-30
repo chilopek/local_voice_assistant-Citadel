@@ -87,17 +87,22 @@ def main() -> int:
         voice = VoiceSession(on_status=lambda text: emit("status", text),
                              on_level=lambda level: emit("mic_level", level))
         def confirm(name: str, arguments: dict) -> bool:
+            from .tools import confirmation_reason
             reply["allowed"] = False
             confirmation.clear()
-            emit("confirm", {"name": name, "arguments": arguments})
+            emit("confirm", {"name": name, "arguments": arguments, "reason": confirmation_reason(name, arguments)})
             while not confirmation.wait(.1):
                 if cancel.is_set():
                     return False
             return reply["allowed"] and not cancel.is_set()
         def answer(text: str) -> None:
             emit("status", "Обрабатываю задачу…")
+            def progress(event):
+                emit("agent", event)
+                if event.get("type") in {"thinking", "tool_result", "done"}:
+                    emit("messages", messages)
             result = run_turn(client, memory, messages, text, confirm=confirm,
-                              on_event=lambda event: emit("agent", event), cancel_event=cancel)
+                              on_event=progress, cancel_event=cancel)
             if cancel.is_set():
                 return
             # Commit conversation before synthesis, so a speech failure loses no answer.

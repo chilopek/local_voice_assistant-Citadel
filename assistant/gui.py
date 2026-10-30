@@ -3,15 +3,18 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import uuid
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
+from . import __version__
 
 from .app import SYSTEM_PROMPT
 from .config import MODEL, PROJECT_ROOT, THINK, VOICE_ENABLED, WORKSPACE
 from .memory import Memory
 from .session import SessionProcess
+from .speech import concise_speech
 from .paths import installed_uninstaller
 from .uninstall import begin_uninstall
 
@@ -23,9 +26,9 @@ TEXT, MUTED, ACCENT = "#e8eaf0", "#929aaa", "#a9c7a5"
 
 
 class AssistantGUI:
-    def __init__(self, root: tk.Tk, *, enable_hotkey: bool = True) -> None:
+    def __init__(self, root: tk.Tk, *, enable_hotkey: bool = True, warm_voice: bool = True) -> None:
         self.root = root
-        root.title("Citadel — локальный помощник")
+        root.title(f"Citadel {__version__.removesuffix('.0')} — локальный помощник")
         width = min(1220, max(900, root.winfo_screenwidth() - 80))
         height = min(800, max(600, root.winfo_screenheight() - 80))
         root.geometry(f"{width}x{height}")
@@ -40,6 +43,13 @@ class AssistantGUI:
         self.closed = threading.Event()
         self.speech_enabled = threading.Event()
         self.worker: SessionProcess | None = None
+        self.voice_host: SessionProcess | None = None
+        self._voice_ready = False
+        self._voice_speech_ready = False
+        self._voice_token = uuid.uuid4().hex
+        self._pending_listen = False
+        self._awaiting_speech = False
+        self._agent_running = False
         self._session_id: str | None = None
         self.hotkey_listener: Any | None = None
         self.mode = "wake"
@@ -50,6 +60,7 @@ class AssistantGUI:
         self._confirmation_window: tk.Toplevel | None = None
         self.mode_var = tk.StringVar(value=MODE_LABELS[self.mode])
         self.status_var = tk.StringVar(value="Готов к работе")
+        self.voice_status_var = tk.StringVar(value="Голос выключен")
         self.speak_var = tk.BooleanVar(value=VOICE_ENABLED)
         self.speak_var.trace_add("write", self._sync_speech)
         self._sync_speech()
@@ -61,6 +72,8 @@ class AssistantGUI:
         self._poll_id = root.after(60, self._drain_events)
         self._welcome()
         self.entry.focus_set()
+        if warm_voice and VOICE_ENABLED:
+            self._ensure_voice()
 
     def _initial_messages(self) -> list[dict[str, Any]]:
         return [{"role": "system", "content": SYSTEM_PROMPT + "\n" + self.memory.prompt_context()}]
@@ -70,8 +83,16 @@ class AssistantGUI:
             self.speech_enabled.set()
         else:
             self.speech_enabled.clear()
-        if self.worker:
-            self.worker.send({"command": "speech", "enabled": self.speak_var.get()})
+        if hasattr(self, "listen_button"):
+            if self.speak_var.get():
+                self._ensure_voice()
+            elif self.voice_host and self._awaiting_speech:
+                self.voice_host.send({"command": "cancel", "token": self._voice_token})
+                self._awaiting_speech = False
+                if self.listening:
+                    self.voice_host.send({"command": "listen", "token": self._voice_token, "mode": self._mode_key()})
+                elif not self._agent_running:
+                    self._finish_session(self.cancel_event, keep_worker=True)
 
     def _build_style(self) -> None:
         style = ttk.Style(self.root)
@@ -114,14 +135,13 @@ class AssistantGUI:
         self._label(sidebar, "ВАШ ЛОКАЛЬНЫЙ ПОМОЩНИК", size=8).pack(anchor="w", pady=(4, 18))
         self.new_button = ttk.Button(sidebar, text="＋  Новая задача", command=self._clear_dialog)
         self.new_button.pack(fill="x")
-        self._label(sidebar, "ВОЗМОЖНОСТИ", size=8).pack(anchor="w", pady=(22, 12))
-        self._label(sidebar, "Интернет · Файлы", color=TEXT, size=10).pack(anchor="w", pady=(0, 6))
-        self._label(sidebar, "Приложения · Экран", color=TEXT, size=10).pack(anchor="w")
         bottom = tk.Frame(sidebar, bg=SIDEBAR)
         bottom.pack(side="bottom", fill="x")
         self._label(bottom, "Локально · Ollama", color=ACCENT, size=9).pack(anchor="w", pady=(8, 3))
         self._label(bottom, MODEL, size=9).pack(anchor="w")
         self._label(bottom, "ГОЛОС", size=8).pack(anchor="w", pady=(16, 8))
+        tk.Label(bottom, textvariable=self.voice_status_var, bg=SIDEBAR, fg=ACCENT,
+                 font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=(0, 5))
         self.mode_box = ttk.Combobox(bottom, textvariable=self.mode_var, values=list(MODE_LABELS.values()),
                                     state="readonly", width=22)
         self.mode_box.pack(fill="x")
@@ -217,6 +237,11 @@ class AssistantGUI:
         self._set_status(f"Выбран режим: {self.mode_var.get()}")
 
     def _toggle_listening(self) -> None:
+        if self._pending_listen:
+            self._pending_listen = False
+            self.listen_button.configure(text="Включить микрофон")
+            self.status_var.set("Включение микрофона отменено")
+            return
         if self.listening:
             self._stop_listening()
         else:
@@ -239,11 +264,19 @@ class AssistantGUI:
         return True
 
     def _start_listening(self) -> None:
+        if self.busy:
+            return
+        if not self._voice_ready or (self.speak_var.get() and not self._voice_speech_ready):
+            self._pending_listen = True
+            self._ensure_voice()
+            self.listen_button.configure(text="Отменить включение")
+            self.status_var.set("Голос готовится при запуске. Микрофон включится после подготовки.")
+            return
         if not self._reserve_session(listening=True):
             return
         mode = self._mode_key()
-        self.mic_level_var.set("Подготовка голоса…")
-        self._start_process(mode)
+        self._voice_token = uuid.uuid4().hex
+        self.voice_host.send({"command": "listen", "token": self._voice_token, "mode": mode})
         self.listen_button.configure(text="Выключить микрофон")
         self.status_var.set(f"Слушаю: {WAKE_WORD}" if mode == "wake" else "Слушаю...")
 
@@ -251,12 +284,18 @@ class AssistantGUI:
         self._stop_task()
 
     def _stop_task(self) -> None:
+        self._pending_listen = False
         if not self.busy:
             return
         self.cancel_event.set()
         worker, self.worker = self.worker, None
         # Invalidate queued events BEFORE killing. Late results cannot touch the new task.
         self._session_id = None
+        self._voice_token = uuid.uuid4().hex
+        self._awaiting_speech = False
+        self._agent_running = False
+        if self.voice_host:
+            self.voice_host.send({"command": "cancel", "token": self._voice_token})
         self._resolve_confirmation(False)
         if worker:
             worker.stop()
@@ -264,7 +303,8 @@ class AssistantGUI:
         self._log_activity("Задача остановлена", "Выполнение и озвучка прерваны. Можно отправить новую задачу.")
 
     def _start_process(self, mode: str, text: str = "") -> None:
-        payload = {"mode": mode, "text": text, "messages": self.messages, "speak": self.speak_var.get()}
+        self._agent_running = True
+        payload = {"mode": mode, "text": text, "messages": self.messages, "speak": False}
         if self.worker and not self.worker.stopped.is_set() and self.worker.process and self.worker.process.poll() is None:
             self._session_id = self.worker.id
             self.worker.send({"command": "new_task", "payload": payload})
@@ -282,7 +322,78 @@ class AssistantGUI:
         self.entry.delete(0, "end")
         self.entry.configure(state="disabled")
         self._append_message("Вы", text)
+        self._voice_token = uuid.uuid4().hex
         self._start_process("task", text)
+
+    def _ensure_voice(self) -> None:
+        speech = bool(self.speak_var.get())
+        if self.voice_host and not self.voice_host.stopped.is_set():
+            if speech and self._voice_ready and not self._voice_speech_ready:
+                self._voice_ready = False
+                self.voice_host.send({"command": "warm", "speech": True})
+            return
+        host = SessionProcess(lambda sid, event, data: self.events.put(("voice_host", (sid, event, data))),
+                              module="assistant.voice_host")
+        self.voice_host = host
+        self.voice_status_var.set("Подготовка голоса при запуске…")
+        host.start({"speech": speech})
+
+    def _voice_event(self, sid: str, event: str, data: Any) -> None:
+        if not self.voice_host or sid != self.voice_host.id:
+            return
+        data = data if isinstance(data, dict) else ({"message": str(data)} if event == "error" else {})
+        if event == "status":
+            self.voice_status_var.set(str(data.get("message", "")))
+            return
+        if event == "warming":
+            self._voice_ready = False
+            self.voice_status_var.set("Подготовка голоса при запуске…")
+            return
+        if event == "ready":
+            self._voice_ready = True
+            self._voice_speech_ready = self._voice_speech_ready or bool(data.get("speech"))
+            self.voice_status_var.set("Голос готов · модели в памяти")
+            if self._pending_listen:
+                self._pending_listen = False
+                self._start_listening()
+            return
+        if event == "session_done":
+            self.voice_host = None
+            self._voice_ready = self._voice_speech_ready = False
+            self.voice_status_var.set("Голос не готов · повторите подготовку")
+            self._awaiting_speech = False
+            if self.listening:
+                self._stop_task()
+            elif self.busy and not self._agent_running:
+                self._finish_session(self.cancel_event, keep_worker=True)
+            return
+        if event == "error":
+            if data.get("token") and data["token"] != self._voice_token:
+                return
+            message = str(data.get("message", "Ошибка голосового режима"))
+            self._append_message("Голос", message, system=True)
+            self._log_activity("Ошибка голоса", message)
+            if data.get("phase") in {"initialization", "capture"} and self.listening:
+                self._stop_task()
+            return
+        if data.get("token") != self._voice_token:
+            return
+        if event == "mic_level":
+            self._set_mic_level(data)
+        elif event == "user" and self.listening and not self._agent_running:
+            text = str(data["text"])
+            self._append_message("Вы", text)
+            self._start_process("task", text)
+        elif event == "armed":
+            self.status_var.set("Цитадель услышана. Произнесите команду в течение 10 секунд")
+        elif event == "listening" and self.listening and not self._agent_running:
+            self.status_var.set("Слушаю команду…" if data.get("armed") or self._mode_key() == "always" else "Слушаю слово «цитадель»…")
+        elif event == "speaking":
+            self.status_var.set("Озвучиваю краткий ответ…")
+        elif event == "speech_done":
+            self._awaiting_speech = False
+            if not self.listening and not self._agent_running:
+                self._finish_session(self.cancel_event, keep_worker=True)
 
     def _show_confirmation(self, request: dict[str, Any]) -> None:
         if self.closed.is_set() or self.cancel_event.is_set():
@@ -297,6 +408,9 @@ class AssistantGUI:
         window.protocol("WM_DELETE_WINDOW", lambda: self._resolve_confirmation(False))
         self._label(window, "Разрешить действие?", color=TEXT, size=18, bold=True).pack(anchor="w")
         self._label(window, str(request["name"]), color=ACCENT).pack(anchor="w", pady=(12, 10))
+        tk.Label(window, text=request.get("reason", "Подтвердите действие, которое может изменить данные."),
+                 wraplength=510, justify="left", anchor="w", bg=PANEL, fg=TEXT,
+                 font=("Segoe UI", 10)).pack(fill="x", pady=(0, 12))
         detail_frame = tk.Frame(window, bg=BG)
         detail_frame.pack(fill="both", expand=True)
         details = tk.Text(detail_frame, bg=BG, fg=TEXT, wrap="word", relief="flat", font=("Segoe UI", 10), padx=12, pady=12, height=6)
@@ -393,6 +507,7 @@ class AssistantGUI:
         if cancel is not self.cancel_event:
             return
         self.busy, self.listening = False, False
+        self._agent_running = False
         self._set_mic_level({"active": False})
         self._session_id = None
         if not keep_worker:
@@ -434,6 +549,9 @@ class AssistantGUI:
                 event, payload = self.events.get_nowait()
             except queue.Empty:
                 break
+            if event == "voice_host":
+                self._voice_event(*payload)
+                continue
             if event == "worker":
                 sid, event, payload = payload
                 if sid != self._session_id:
@@ -442,7 +560,12 @@ class AssistantGUI:
                     self.messages = payload
                     continue
                 if event == "task_done":
-                    self._finish_session(self.cancel_event, keep_worker=True)
+                    self._agent_running = False
+                    if self.listening:
+                        if not self._awaiting_speech and self.voice_host:
+                            self.voice_host.send({"command": "resume", "token": self._voice_token})
+                    elif not self._awaiting_speech:
+                        self._finish_session(self.cancel_event, keep_worker=True)
                     continue
                 if event == "session_done":
                     payload = self.cancel_event
@@ -450,6 +573,11 @@ class AssistantGUI:
                 self._append_message("Вы", str(payload))
             elif event == "assistant":
                 self._append_message("Citadel", str(payload))
+                if self.speak_var.get() and self._voice_ready and self._voice_speech_ready and self.voice_host:
+                    self._awaiting_speech = True
+                    self.voice_host.send({"command": "speak", "token": self._voice_token, "text": concise_speech(str(payload))})
+                elif self.speak_var.get():
+                    self._log_activity("Голос готовится при запуске", "Текст ответа уже доступен. Микрофон включается после подготовки локальных моделей.")
             elif event == "status":
                 if not (self.busy and self.cancel_event.is_set()):
                     self.status_var.set(str(payload))
@@ -474,6 +602,9 @@ class AssistantGUI:
         self.closed.set()
         self.cancel_event.set()
         self._session_id = None
+        if self.voice_host:
+            self.voice_host.stop()
+            self.voice_host = None
         if self.worker:
             self.worker.stop()
             self.worker = None

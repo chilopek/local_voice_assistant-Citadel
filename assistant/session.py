@@ -51,9 +51,10 @@ class ProcessJob:
 
 
 class SessionProcess:
-    def __init__(self, emit: Callable[[str, str, Any], None]) -> None:
+    def __init__(self, emit: Callable[[str, str, Any], None], *, module: str = "assistant.worker") -> None:
         self.id = uuid.uuid4().hex
         self.emit = emit
+        self.module = module
         self.process: subprocess.Popen | None = None
         self.job: ProcessJob | None = None
         self.stopped = threading.Event()
@@ -67,7 +68,7 @@ class SessionProcess:
         reported_error = False
         try:
             process = self.process = subprocess.Popen(
-                [str(PYTHON_EXE), "-B", "-X", "utf8", "-u", "-m", "assistant.worker"],
+                [str(PYTHON_EXE), "-B", "-X", "utf8", "-u", "-m", self.module],
                 cwd=PACKAGE_ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,

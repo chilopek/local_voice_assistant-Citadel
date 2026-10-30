@@ -173,7 +173,7 @@ class OpeningTests(unittest.TestCase):
     def test_managed_browser_unchanged(self):
         with patch("assistant.browser.BROWSER.call", return_value={"text": "page"}) as managed:
             self.assertEqual(tools.browser_open("https://example.com"), {"text": "page"})
-        managed.assert_called_once_with("navigate", url="https://example.com")
+        managed.assert_called_once_with("navigate", url="https://example.com", visible=False)
 
 
 if __name__ == "__main__":

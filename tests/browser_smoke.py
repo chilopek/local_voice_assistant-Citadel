@@ -20,9 +20,9 @@ try:
             target = next(e["element_id"] for e in first["elements"] if e["tag"] == "input")
             # Simulate text and voice requests arriving from different threads.
             with ThreadPoolExecutor(max_workers=1) as worker:
-                filled = worker.submit(browser.call, "fill", element_id=target, text="Citadel agent").result()
+                filled = worker.submit(browser.call, "fill", element_id=target, text="Citadel agent", approved=True).result()
             button = next(e["element_id"] for e in filled["elements"] if e["tag"] == "button")
-            result = browser.call("click", element_id=button)
+            result = browser.call("click", element_id=button, approved=True)
             assert "Saved: Citadel agent" in result["text"], result
             try:
                 browser.call("click", element_id=button)

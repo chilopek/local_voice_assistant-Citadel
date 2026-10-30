@@ -49,6 +49,14 @@ jobs:
         shell: pwsh
         run: .\.venv\Scripts\python.exe tests/browser_smoke.py
 
+      - name: Test browser permissions and search-to-answer workflow
+        if: matrix.python == '3.12'
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m tests.browser_policy_smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe -m tests.browser_agent_workflow
+
   native-installer:
     needs: build
     runs-on: windows-latest

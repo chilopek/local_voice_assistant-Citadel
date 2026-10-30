@@ -168,7 +168,7 @@ class RecognitionTests(unittest.TestCase):
         self.assertIn("Цитадель", call.kwargs["initial_prompt"])
         self.assertEqual(str(call.args[0].dtype), "float32")
         self.assertAlmostEqual(float(call.args[0][0]), 1200 / 32768)
-        self.assertTrue(any("Загрузка" in status for status in statuses))
+        self.assertTrue(any("локальных файлов" in status for status in statuses))
 
     def test_lazy_segment_exception_is_preserved(self):
         def segments():

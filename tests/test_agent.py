@@ -90,8 +90,8 @@ class AgentTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("ValueError", result["result"]["stderr"])
 
-    def test_external_files_and_browser_writes_need_confirmation(self):
-        self.assertTrue(needs_confirmation("read_file", {"path": str(Path(self.folder.name) / "private.txt")}))
+    def test_external_reads_are_allowed_and_unknown_browser_writes_need_confirmation(self):
+        self.assertFalse(needs_confirmation("read_file", {"path": str(Path(self.folder.name) / "private.txt")}))
         self.assertTrue(needs_confirmation("browser_action", {"action": "click"}))
         self.assertFalse(needs_confirmation("browser_action", {"action": "scroll"}))
         self.assertFalse(needs_confirmation("search_web", {"query": "test"}))

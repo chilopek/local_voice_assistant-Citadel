@@ -137,6 +137,8 @@ class VoiceSession:
         self._on_level = on_level
         self._last_level_at = 0.0
         self._stop_event = threading.Event()
+        self._stt_warmed = False
+        self._tts_warmed = False
 
     def _status(self, message: str) -> None:
         logger.info(message)
@@ -166,10 +168,34 @@ class VoiceSession:
         if speech:
             self._load_tts()
 
+    def warmup(self, *, speech: bool = False) -> None:
+        """Initialize VAD, encoder and synthesis kernels without any audio device."""
+        import numpy as np
+        if not self._stt_warmed:
+            self._status("Проверка распознавания при запуске…")
+            stt = self._load_stt()
+            samples = np.zeros(16000, dtype=np.float32)
+            segments, _ = stt.transcribe(samples, language="ru", beam_size=1, vad_filter=True)
+            list(segments)
+            stt.encode(stt.feature_extractor(samples))
+            self._stt_warmed = True
+        if speech and not self._tts_warmed:
+            self._status("Проверка озвучки при запуске…")
+            model, context = self._load_tts()
+            speaker, rate = self._tts_settings(model)
+            with context.inference_mode():
+                audio = model.apply_tts(text="Готово.", speaker=speaker, sample_rate=rate,
+                                        put_accent=True, put_yo=True)
+            if hasattr(audio, "detach"):
+                audio = audio.detach().cpu().numpy()
+            if not np.asarray(audio).size or not np.isfinite(audio).all():
+                raise VoiceError("Проверка озвучки не дала корректный звук")
+            self._tts_warmed = True
+
     def _load_stt(self) -> Any:
         if self._stt is not None:
             return self._stt
-        self._status("Загрузка распознавания Whisper (CPU, int8)...")
+        self._status("Подготовка Whisper из локальных файлов…")
         try:
             from faster_whisper import WhisperModel
             snapshot = resolve_whisper_snapshot(self.stt_model, allow_download=self.allow_download)
@@ -186,7 +212,7 @@ class VoiceSession:
                 path = get_piper_path()
                 key = ("piper", str(path))
                 if self._tts is None or self._tts_key != key:
-                    self._status("Загрузка локального нейроголоса Piper…")
+                    self._status("Подготовка Piper из локальных файлов…")
                     self._tts = PiperBackend.load(path)
                     self._torch = SimpleNamespace(inference_mode=nullcontext)
                     self._tts_key = key
@@ -200,7 +226,7 @@ class VoiceSession:
         key = ("ru", self.tts_model)
         if self._tts is not None and self._torch is not None and self._tts_key == key:
             return self._tts, self._torch
-        self._status(f"Загрузка Silero TTS ({key[0]}/{key[1]}, CPU)...")
+        self._status("Подготовка Silero из локальных файлов…")
         try:
             import torch
             if not re.fullmatch(r"v[3-5][\w]*_ru", key[1]):
