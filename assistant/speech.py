@@ -6,6 +6,33 @@ safe prefix cannot fit, referring to chat is preferable to guessing its meaning.
 from __future__ import annotations
 
 import re
+import datetime as dt
+
+
+def reminder_text(item: dict, metadata: bool = True) -> str:
+    when = dt.datetime.fromisoformat(item['due_at']).astimezone()
+    months = ('января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря')
+    answer = f"Напомню {when.day} {months[when.month-1]} в {when:%H:%M}: {item['title']}."
+    repeat = item.get('repeat',0)
+    if repeat:
+        answer += f" Повтор с интервалом {repeat/60:g} минут." if repeat%60==0 else f" Повтор с интервалом {repeat:g} секунд."
+    if metadata:
+        answer += f"\nID: {item['id']}. Приложение должно оставаться открытым; пропущенное напоминание появится после запуска."
+    return answer
+
+
+def outcome_speech(outcomes, answer: str) -> dict | None:
+    if outcomes.missing():
+        return None
+    if outcomes.reminders:
+        return {'text':' '.join(reminder_text(item,False) for item in outcomes.reminders),'verbatim':True}
+    if outcomes.reading:
+        item = outcomes.reading
+        text = item['content'][:6000]
+        if item.get('truncated') or len(item['content'])>6000:
+            text += '\nЭто первая часть файла. Для продолжения попросите прочитать дальше.'
+        return {'text':text,'verbatim':True}
+    return None
 
 
 _LIMIT = 420

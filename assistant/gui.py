@@ -611,10 +611,12 @@ class AssistantGUI:
             if event == "user":
                 self._append_message("Вы", str(payload))
             elif event == "assistant":
-                self._append_message("Citadel", str(payload))
+                answer = payload.get('text','') if isinstance(payload,dict) else str(payload)
+                spoken = payload.get('speech') if isinstance(payload,dict) else None
+                self._append_message("Citadel", answer)
                 if self.speak_var.get() and self._voice_ready and self._voice_speech_ready and self.voice_host:
                     self._awaiting_speech = True
-                    self.voice_host.send({"command": "speak", "token": self._voice_token, "text": concise_speech(str(payload))})
+                    self.voice_host.send({"command": "speak", "token": self._voice_token, "text": spoken['text'] if isinstance(spoken,dict) else concise_speech(answer)})
                 elif self.speak_var.get():
                     self._log_activity("Голос готовится при запуске", "Текст ответа уже доступен. Микрофон включается после подготовки локальных моделей.")
             elif event == "status":
@@ -646,7 +648,7 @@ class AssistantGUI:
         if self._pending_notice_audio and self._voice_ready and self._voice_speech_ready and self.voice_host:
             self._notice_speech = self._awaiting_speech = True
             self.stop_button.configure(state='normal')
-            self.voice_host.send({'command':'speak','token':self._voice_token,'text':self._pending_notice_audio.pop(0)})
+            self.voice_host.send({'command':'speak','token':self._voice_token,'text':self._pending_notice_audio.pop(0),'chime':True})
             return
         if not self._pending_notices:
             return
@@ -684,14 +686,21 @@ class AssistantGUI:
         if self.speak_var.get() and self._voice_ready and self._voice_speech_ready and self.voice_host:
             self._notice_speech = self._awaiting_speech = True
             self.stop_button.configure(state='normal')
-            self.voice_host.send({'command': 'speak', 'token': self._voice_token, 'text': concise_speech(text)})
+            self.voice_host.send({'command': 'speak', 'token': self._voice_token, 'text': concise_speech(text),'chime':True})
         elif self.speak_var.get():
             self._pending_notice_audio.append(concise_speech(text))
+        elif self.listening and self.voice_host and self._voice_ready:
+            self._notice_speech = self._awaiting_speech = True
+            self.stop_button.configure(state='normal')
+            self.voice_host.send({'command':'speak','token':self._voice_token,'text':'','chime':True})
+        else:
+            from .chime import play_chime
+            play_chime()
 
     def _show_personal(self) -> None:
         window = tk.Toplevel(self.root)
         window.title('Цитадель · дела и память')
-        window.geometry('760x480')
+        window.geometry('800x600')
         notebook = ttk.Notebook(window)
         notebook.pack(fill='both', expand=True, padx=16, pady=16)
         reminders = ttk.Frame(notebook, padding=12)
@@ -720,6 +729,31 @@ class AssistantGUI:
         ttk.Button(voice_settings,text='Остановить подготовку',command=cancel_preparation).pack(anchor='w')
         ttk.Label(voice_settings,textvariable=self.voice_setup_var,wraplength=650).pack(anchor='w',pady=12)
         ttk.Label(voice_settings,text='По умолчанию: до 120 секунд, пауза до 1,2 секунды.\nДля особенно длинной диктовки можно увеличить voice_silence_seconds в настройках.',wraplength=650).pack(anchor='w')
+        ttk.Label(voice_settings,text='Голос: «Джарвис» — более низкий eugene; обычный — aidar.\nЭто локальные голоса Silero, без клонирования актёра.',wraplength=650).pack(anchor='w',pady=(12,4))
+        profile = tk.StringVar(value='jarvis')
+        ttk.Combobox(voice_settings,textvariable=profile,values=('jarvis','neutral'),state='readonly').pack(anchor='w')
+        def prepare_voice():
+            if self._voice_setup and not self._voice_setup.stopped.is_set() and (self._voice_setup.process is None or self._voice_setup.process.poll() is None):
+                self.voice_setup_var.set('Дождитесь текущей подготовки или остановите её.')
+                return
+            self._voice_setup = SessionProcess(lambda sid,event,data:self.events.put(('voice_setup',(sid,event,data))),module='assistant.voice_setup')
+            self._voice_setup.start({'profile':profile.get()})
+        ttk.Button(voice_settings,text='Подготовить выбранный голос',command=prepare_voice).pack(anchor='w',pady=6)
+        model_settings = ttk.Frame(notebook,padding=16)
+        notebook.add(model_settings,text='Модель агента')
+        ttk.Label(model_settings,text='Модель определяет качество рассуждений',style='Title.TLabel').pack(anchor='w')
+        ttk.Label(model_settings,text='Маленькая модель может ошибаться в составных поручениях.\nБолее крупная требует больше RAM/VRAM и может отвечать медленнее.\nЗагрузка начнётся только после нажатия кнопки.',wraplength=700).pack(anchor='w',pady=14)
+        agent_model = tk.StringVar(value=MODEL)
+        ttk.Combobox(model_settings,textvariable=agent_model,values=tuple(dict.fromkeys([MODEL,'qwen3:8b','qwen3:14b'])),width=38).pack(anchor='w')
+        def prepare_agent():
+            if self._voice_setup and not self._voice_setup.stopped.is_set() and (self._voice_setup.process is None or self._voice_setup.process.poll() is None):
+                self.voice_setup_var.set('Дождитесь текущей подготовки или остановите её.')
+                return
+            self._voice_setup = SessionProcess(lambda sid,event,data:self.events.put(('voice_setup',(sid,event,data))),module='assistant.voice_setup')
+            self._voice_setup.start({'agent_model':agent_model.get().strip()})
+        ttk.Button(model_settings,text='Загрузить и проверить модель',command=prepare_agent).pack(anchor='w',pady=12)
+        ttk.Button(model_settings,text='Остановить подготовку',command=cancel_preparation).pack(anchor='w')
+        ttk.Label(model_settings,textvariable=self.voice_setup_var,wraplength=700).pack(anchor='w',pady=12)
         store = PersonalStore(self._personal_path)
         tree = ttk.Treeview(reminders, columns=('time','title'), show='headings', height=8)
         tree.heading('time', text='Когда / тип')

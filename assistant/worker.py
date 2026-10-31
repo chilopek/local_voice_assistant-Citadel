@@ -101,7 +101,10 @@ def main() -> int:
             return reply["allowed"] and not cancel.is_set()
         def answer(text: str) -> None:
             emit("status", "Обрабатываю задачу…")
+            spoken = {'value':None}
             def progress(event):
+                if event.get('type')=='done':
+                    spoken['value'] = event.get('speech')
                 emit("agent", event)
                 if event.get("type") in {"thinking", "tool_result", "done"}:
                     emit("messages", messages)
@@ -111,14 +114,14 @@ def main() -> int:
                 return
             # Commit conversation before synthesis, so a speech failure loses no answer.
             emit("messages", messages)
-            emit("assistant", result)
+            emit("assistant", {'text':result,'speech':spoken['value']} if spoken['value'] else result)
             if speech["enabled"]:
                 try:
                     speech_cancel.clear()
                     if not speech["enabled"]:
                         speech_cancel.set()
                     emit("status", "Озвучиваю ответ…")
-                    voice.speak(concise_speech(result), cancel_event=speech_cancel)
+                    voice.speak(spoken['value']['text'] if spoken['value'] else concise_speech(result), cancel_event=speech_cancel)
                 except Exception as error:
                     emit("error", f"Озвучка: {error}")
         while not cancel.is_set():

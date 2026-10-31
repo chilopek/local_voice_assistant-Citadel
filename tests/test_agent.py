@@ -47,7 +47,8 @@ class AgentTests(unittest.TestCase):
         messages, events = [], []
         with patch("assistant.tools.WORKSPACE", Path(self.folder.name)), patch("assistant.tools.is_inside_workspace", lambda p: p.is_relative_to(self.folder.name)):
             answer = app.run_turn(model, self.memory, messages, "Создай и проверь файл", confirm=lambda *_: True, on_event=events.append)
-        self.assertEqual(answer, "Файл создан и проверен.")
+        self.assertTrue(answer.startswith("Файл создан и проверен."))
+        self.assertIn("created.txt",answer)
         results = [json.loads(m["content"]) for m in messages if m["role"] == "tool"]
         self.assertFalse(results[0]["ok"])
         self.assertTrue(results[1]["ok"])

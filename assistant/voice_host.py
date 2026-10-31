@@ -90,6 +90,12 @@ class ResidentVoice:
                     if kind == "speak":
                         self.emit("speaking", {"token": token})
                         try:
+                            if command.get('chime'):
+                                from .chime import play_chime
+                                play_chime()
+                                self.interrupt.wait(.35)
+                            if self.interrupt.is_set():
+                                continue
                             self.voice.speak(command["text"], cancel_event=self.interrupt)
                         except Exception as error:
                             self.emit("error", {"message": str(error), "token": token, "phase": "speech"})

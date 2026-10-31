@@ -56,6 +56,8 @@ jobs:
           .\.venv\Scripts\python.exe -m tests.browser_policy_smoke
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv\Scripts\python.exe -m tests.browser_agent_workflow
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe -m tests.browser_media_smoke
 
   native-installer:
     needs: build

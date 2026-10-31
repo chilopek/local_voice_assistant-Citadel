@@ -24,7 +24,7 @@ def stage(destination: Path, refresh: bool = False) -> None:
         raise ValueError("Existing payload is not owned by this builder, or --refresh was not provided")
     if sys.platform != "win32" or struct.calcsize("P") != 8:
         raise RuntimeError("Build the runtime using 64-bit Windows Python")
-    required_modules = ("torch", "faster_whisper", "silero", "piper", "sounddevice", "pynput", "playwright", "bs4", "ddgs", "pywinauto", "PIL")
+    required_modules = ("torch", "faster_whisper", "silero", "piper", "sounddevice", "pynput", "playwright", "bs4", "ddgs", "pywinauto", "PIL", "psutil")
     missing = [name for name in required_modules if importlib.util.find_spec(name) is None]
     if missing:
         raise RuntimeError(f"Build dependencies are missing: {missing}. Install packaging/requirements-win.lock first.")
@@ -62,7 +62,7 @@ def stage(destination: Path, refresh: bool = False) -> None:
     version = f"{sys.version_info.major}{sys.version_info.minor}"
     # This isolates the runtime from registry Python installs, user-site and PYTHONPATH.
     (runtime / f"python{version}._pth").write_text(".\nLib\nDLLs\nLib\\site-packages\n..\\app\nimport site\n", encoding="utf-8")
-    manifest = {"product": "CitadelLocalAssistant", "version": "0.7.0", "python": sys.version,
+    manifest = {"product": "CitadelLocalAssistant", "version": "0.8.0", "python": sys.version,
                 "data_dir_name": "LocalAssistant", "mutex_name": "CitadelLocalAssistant", "format": 1}
     (destination / "citadel.install.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     (destination / "bundled-packages.txt").write_text("\n".join(packages) + "\n", encoding="utf-8")

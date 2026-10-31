@@ -5,7 +5,7 @@ param(
 
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "LocalAssistant"),
 
-    [ValidateSet("auto", "qwen3:1.7b-instruct", "qwen3:4b-instruct", "qwen3:8b-instruct")]
+    [ValidateSet("auto", "qwen3:1.7b", "qwen3:4b-instruct", "qwen3:8b")]
     [string]$Model = "auto",
 
     [ValidateSet("auto", "fast", "balanced", "power")]
@@ -220,9 +220,9 @@ function Select-Model {
 
     if (-not $NonInteractive -and $Mode -eq "auto") {
         Write-Host "`nВыберите режим помощника:" -ForegroundColor Yellow
-        Write-Host "  [1] Быстрый          — qwen3:1.7b-instruct"
+        Write-Host "  [1] Быстрый          — qwen3:1.7b"
         Write-Host "  [2] Сбалансированный — qwen3:4b-instruct (рекомендуется)"
-        Write-Host "  [3] Мощный           — qwen3:8b-instruct"
+        Write-Host "  [3] Мощный           — qwen3:8b"
         Write-Host "  [4] Авто             — выбор по характеристикам"
         $choice = Read-Host "Введите номер [4]"
         switch ($choice) {
@@ -234,11 +234,11 @@ function Select-Model {
     }
 
     switch ($Mode) {
-        "fast" { return "qwen3:1.7b-instruct" }
+        "fast" { return "qwen3:1.7b" }
         "balanced" { return "qwen3:4b-instruct" }
-        "power" { return "qwen3:8b-instruct" }
+        "power" { return "qwen3:8b" }
         default {
-            if ($ramGb -ge 16) { return "qwen3:8b-instruct" }
+            if ($ramGb -ge 16) { return "qwen3:8b" }
             return "qwen3:4b-instruct"
         }
     }
@@ -365,7 +365,7 @@ if (-not $python) { throw "Не найден рабочий 64-битный Pyth
 $selectedModel = Select-Model
 Step "Выбор модели: $selectedModel"
 $voiceEnabled = Select-Voice
-$sttModel = if ($Mode -eq "fast" -or $selectedModel -eq "qwen3:1.7b-instruct") { "base" } else { "small" }
+$sttModel = if ($Mode -eq "fast" -or $selectedModel -eq "qwen3:1.7b") { "base" } else { "small" }
 Step "Голосовой режим: $(if ($voiceEnabled) { 'включён' } else { 'выключен' })"
 
 $localConfig = @{

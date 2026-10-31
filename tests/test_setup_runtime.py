@@ -33,7 +33,7 @@ class SetupConfigTests(unittest.TestCase):
             root = Path(folder)
             self.configure(root, "--model", "balanced", "--voice", "on")
             updated = self.configure(root, "--model", "fast", "--voice", "off", "--replace-config")
-            self.assertEqual(updated["model"], "qwen3:1.7b-instruct")
+            self.assertEqual(updated["model"], "qwen3:1.7b")
             self.assertFalse(updated["voice"])
 
     def test_legacy_workspace_path_is_preserved(self):

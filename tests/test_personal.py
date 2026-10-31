@@ -14,10 +14,13 @@ from assistant.worker import WakeGate
 
 class PersonalTests(unittest.TestCase):
     def setUp(self):
+        self.chime = patch('assistant.chime.play_chime')
+        self.chime.start()
         self.folder = tempfile.TemporaryDirectory()
         self.root = Path(self.folder.name)
         self.store = personal.PersonalStore(self.root/'personal.sqlite')
     def tearDown(self):
+        self.chime.stop()
         self.folder.cleanup()
 
     def test_restart_overdue_lease_cancellation_and_ack(self):

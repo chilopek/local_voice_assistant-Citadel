@@ -20,7 +20,7 @@ from assistant.voice_assets import prepare_voice_assets
 
 
 def choose_model(mode: str) -> str:
-    modes = {"fast": "qwen3:1.7b-instruct", "balanced": "qwen3:4b-instruct", "power": "qwen3:8b-instruct"}
+    modes = {"fast": "qwen3:1.7b", "balanced": "qwen3:4b-instruct", "power": "qwen3:8b"}
     if mode in modes:
         return modes[mode]
     if mode != "auto":
@@ -143,6 +143,10 @@ def main() -> int:
             config = {"model": choose_model(args.model), "voice": args.voice == "on", "think": False, "num_ctx": 8192,
                       "num_predict": 768, "stt_model": "base" if args.model == "fast" else "small", "tts_model": "v5_6_ru", "tts_speaker": "aidar"}
             path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        legacy = {'qwen3:1.7b-instruct':'qwen3:1.7b','qwen3:8b-instruct':'qwen3:8b'}
+        if config.get('model') in legacy:
+            config['model'] = legacy[config['model']]
+            path.write_text(json.dumps(config,ensure_ascii=False,indent=2),encoding='utf-8')
         logging.info("Configuration ready; model=%s, voice=%s", config["model"], config.get("voice"))
         if not args.skip_download:
             if config.get("voice", False):

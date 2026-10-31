@@ -46,25 +46,33 @@ def list_files(path: str = ".") -> list[dict[str, Any]]:
     return result[:200]
 
 
-def read_file(path: str, max_chars: int = 12000) -> dict[str, Any]:
+def read_file(path: str, max_chars: int = 12000, start: int = 0) -> dict[str, Any]:
     file_path = _resolve_workspace_path(path)
     if not file_path.is_file():
         raise ValueError(f"Файл не найден: {path}")
     max_chars = max(100, min(int(max_chars), 16000))
+    start = max(0,min(int(start),10000000))
     with file_path.open(encoding="utf-8-sig", errors="replace") as source:
+        source.read(start)
         text = source.read(max_chars + 1)
-    return {"path": str(file_path), "content": text[:max_chars], "truncated": len(text) > max_chars}
+    return {"path": str(file_path), "content": text[:max_chars], "start":start,
+            "next_start":start+max_chars if len(text)>max_chars else None,"truncated": len(text) > max_chars}
 
 
-def write_file(path: str, content: str) -> dict[str, Any]:
+def write_file(path: str, content: str, validate_python: bool = False) -> dict[str, Any]:
     file_path = _resolve_workspace_path(path)
+    normalized=False
+    if validate_python:
+        from .code_text import python_source
+        content,normalized=python_source(content)
     if protected_path(file_path) and not _confirmed_execution.get():
         raise PermissionError("Запись в защищённое расположение требует подтверждения.")
     file_path.parent.mkdir(parents=True, exist_ok=True)
     # O_EXCL closes the check/create race, including a newly inserted symlink.
     with file_path.open("w" if _confirmed_execution.get() else "x", encoding="utf-8") as output:
         output.write(content)
-    return {"path": str(file_path), "bytes": file_path.stat().st_size}
+    verified = file_path.read_text(encoding='utf-8')==content
+    return {"path": str(file_path), "bytes": file_path.stat().st_size,'verified':verified,'syntax_checked':validate_python,'normalized_linebreaks':normalized}
 
 
 def open_path(path: str) -> dict[str, Any]:
@@ -237,6 +245,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "path": {"type": "string"},
                     "max_chars": {"type": "integer", "minimum": 100, "maximum": 30000},
+                    "start": {"type":"integer","minimum":0},
                 },
                 "required": ["path"],
             },
@@ -249,7 +258,7 @@ TOOL_SCHEMAS = [
             "description": "Создать новый текстовый файл в обычной папке без подтверждения. Перезапись и защищённые расположения требуют подтверждения.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                "properties": {"path": {"type": "string"}, "content": {"type": "string"},'validate_python':{'type':'boolean'}},
                 "required": ["path", "content"],
             },
         },
@@ -290,7 +299,8 @@ def run_python(code: str, timeout: int = 60) -> dict:
 
 
 def get_environment() -> dict:
-    return {"os": platform.platform(), "python": sys.version.split()[0], "home": str(Path.home()), "workspace": str(WORKSPACE), "desktop": str(Path.home() / "Desktop"), "downloads": str(Path.home() / "Downloads"), "time": get_time(), "capabilities": ["web search", "read HTTP/JSON/HTML/XML", "persistent browser", "Windows UI Automation", "files", "Python", "PowerShell"], "browser_profile": "Отдельный профиль Цитадели; вход на сайты пользователь выполняет сам."}
+    from .system_tools import known_folders
+    return {"os": platform.platform(), "python": sys.version.split()[0], "home": str(Path.home()), "workspace": str(WORKSPACE), **known_folders(), "time": get_time(), "capabilities": ["web search", "read HTTP/JSON/HTML/XML", "persistent browser", "Windows UI Automation", "files", "Python", "PowerShell","system metrics","file discovery","literal editor paste"], "browser_profile": "Отдельный профиль Цитадели; вход на сайты пользователь выполняет сам."}
 
 
 def download_file(url: str, path: str) -> dict:
@@ -325,6 +335,11 @@ def browser_snapshot() -> dict:
     return BROWSER.call("snapshot")
 
 
+def browser_media(action: str = 'play', index: int = 0) -> dict:
+    from .browser import BROWSER
+    return BROWSER.call('media',media_action=action,media_index=index)
+
+
 def browser_search(query: str, provider: str = "google") -> dict:
     from .browser import BROWSER
     return BROWSER.call("search", query=query, provider=provider)
@@ -351,6 +366,12 @@ from .desktop import desktop_snapshot, desktop_action, take_screenshot
 from .context_tools import read_screen, get_location
 from .personal import (create_reminder, list_reminders, cancel_reminder, snooze_reminder,
                        watch_process, watch_file, remember_fact, list_memory, forget_fact)
+from .system_tools import system_status, list_processes, find_files
+
+
+def insert_text(window_handle: int, text: str, control_id: str = '', language: str = 'text') -> dict:
+    from .editor import insert_text as paste
+    return paste(window_handle,text,control_id,approved=_confirmed_execution.get(),language=language)
 
 TOOL_FUNCTIONS.update({name: function for name, function in {
     "get_environment": get_environment, "search_web": search_web, "fetch_url": fetch_url,
@@ -364,11 +385,19 @@ TOOL_FUNCTIONS.update({name: function for name, function in {
     "cancel_reminder": cancel_reminder, "snooze_reminder": snooze_reminder,
     "watch_process": watch_process, "watch_file": watch_file,
     "remember_fact": remember_fact, "list_memory": list_memory, "forget_fact": forget_fact,
+    "system_status":system_status,"list_processes":list_processes,"find_files":find_files,
+    "insert_text":insert_text,
+    "browser_media":browser_media,
 }.items()})
 
 _str = {"type": "string"}
 _int = {"type": "integer"}
 TOOL_SCHEMAS.extend([
+    _schema('browser_media','Воспроизвести или приостановить наблюдённый HTML audio/video. action: play/pause, index из media в browser_snapshot. Для авторизации сначала browser_open(visible=true), вход пользователь выполняет сам.',{'action':_str,'index':_int}),
+    _schema('system_status','Снять реальные показатели CPU, RAM, места на дисках и скорости дисковых операций. Чтение без подтверждения.',{'sample_seconds':{'type':'number'}}),
+    _schema('list_processes','Список процессов с PID и памятью, либо замер CPU. Чтение без завершения процессов.',{'sort_by':_str,'limit':_int}),
+    _schema('find_files','Рекурсивный поиск по части имени/маске. По умолчанию рабочая папка, Документы, Загрузки, Рабочий стол, включая OneDrive. Для всей системы укажи roots. Не следует по ссылкам; truncated=true означает неполный поиск.',{'query':_str,'roots':{'type':'array','items':_str},'max_results':_int,'max_seconds':{'type':'number'},'include_system':{'type':'boolean'}},['query']),
+    _schema('insert_text','Вставить буквальный многострочный Unicode/код в наблюдённый редактор. window_handle/control_id из desktop_snapshot. language=python проверяет синтаксис без запуска. Не нажимает Enter. Для терминалов запрещено; неизвестное приложение требует подтверждения.',{'window_handle':_int,'control_id':_str,'text':_str,'language':_str},['window_handle','text']),
     _schema("create_reminder", "Создать локальное напоминание/таймер. delay_seconds — через сколько секунд, либо due_at — ISO дата с часовым поясом. repeat_seconds — период повторения. Сохраняется после перезапуска; при закрытой Цитадели сработает после открытия.", {"title": _str, "delay_seconds": {"type": "number"}, "due_at": _str, "repeat_seconds": {"type": "number"}}, ["title"]),
     _schema("list_reminders", "Показать активные напоминания и наблюдения с их ID.", {}),
     _schema("cancel_reminder", "Отменить напоминание или наблюдение по ID из списка.", {"notice_id": _str}, ["notice_id"]),
@@ -402,6 +431,12 @@ CONFIRMATION_REQUIRED = {"run_powershell", "run_python", "launch_program", "down
 
 
 def needs_confirmation(name: str, arguments: dict[str, Any]) -> bool:
+    if name=='insert_text':
+        try:
+            from .editor import assess_insert
+            return assess_insert(arguments.get('window_handle',0),arguments.get('control_id',''))['requires_confirmation']
+        except Exception:
+            return True
     if not isinstance(arguments, dict) or "confirmed" in arguments:
         return True
     if name == "launch_program":
@@ -439,7 +474,7 @@ def needs_confirmation(name: str, arguments: dict[str, Any]) -> bool:
                         "browser_snapshot", "desktop_snapshot", "take_screenshot", "read_screen",
                         "get_location", "update_plan", "select_tools", "create_reminder", "list_reminders",
                         "cancel_reminder", "snooze_reminder", "watch_process", "watch_file",
-                        "remember_fact", "list_memory", "forget_fact"}
+                        "remember_fact", "list_memory", "forget_fact", "system_status","list_processes","find_files","browser_media"}
 
 
 def confirmation_reason(name: str, arguments: dict[str, Any]) -> str:

@@ -80,6 +80,7 @@ class OllamaClient:
         self.base_url = base_url
         self.model = model
         self._vision: bool | None = None
+        self.num_predict: int | None = None
 
     @property
     def supports_vision(self) -> bool:
@@ -221,7 +222,8 @@ class OllamaClient:
         for message in bounded:
             if message.get("role") == "tool" and len(str(message.get("content", ""))) > 6500:
                 message["content"] = self._short_result(message["content"], 6000)
-        budget = max(8000, NUM_CTX * 3 - len(json.dumps(tools, ensure_ascii=False)) - NUM_PREDICT * 3)
+        prediction_limit = self.num_predict or NUM_PREDICT
+        budget = max(8000, NUM_CTX * 3 - len(json.dumps(tools, ensure_ascii=False)) - prediction_limit * 3)
         removed = []
         def text_size() -> int:
             # Base64 pixels do not consume the text tokenizer's character budget.
@@ -255,7 +257,7 @@ class OllamaClient:
             "think": THINK,
             "options": {
                 "temperature": 0.2,
-                "num_predict": NUM_PREDICT,
+                "num_predict": prediction_limit,
                 "num_ctx": NUM_CTX,
             },
             "keep_alive": "10m",
