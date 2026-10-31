@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-assistant"
-version = "0.8.0"
+version = "0.9.0"
 description = "Локальное ядро персонального голосового помощника"
 requires-python = ">=3.12"
 dependencies = [
+    "pypdf>=6.21.4,<7",
     "psutil>=7.2,<9",
     "beautifulsoup4>=4.12,<5",
     "ddgs>=9.16,<10",

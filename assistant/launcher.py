@@ -53,6 +53,9 @@ def main(argv: list[str] | None = None) -> int:
             mutex = kernel.CreateMutexW(None, False, name)
             if not mutex:
                 raise ctypes.WinError(ctypes.get_last_error())
+            if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+                logger.info('Application is already running')
+                return 0
         from .tk_runtime import configure_tk_paths
 
         logger.info("Tcl/Tk paths: %s", configure_tk_paths())
@@ -70,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
                 show_failure(details, log_path)
 
         root.report_callback_exception = report_callback_exception
-        app = AssistantGUI(root, enable_hotkey=not args.check, warm_voice=not args.check, enable_scheduler=not args.check)
+        app = AssistantGUI(root, enable_hotkey=not args.check, warm_voice=not args.check, enable_scheduler=not args.check, enable_history=not args.check)
         icon_path = ASSET_ROOT / "citadel.ico"
         if icon_path.exists():
             root.iconbitmap(default=str(icon_path))

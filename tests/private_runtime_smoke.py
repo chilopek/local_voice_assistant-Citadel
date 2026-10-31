@@ -12,7 +12,7 @@ tests = Path(__file__).resolve().parent
 with tempfile.TemporaryDirectory(prefix="citadel-private-runtime-") as folder:
     env = dict(os.environ, CITADEL_DATA_DIR=folder, PYTHONHOME="C:/missing-python-regression", PYTHONPATH="C:/missing-packages-regression")
     env.pop("ASSISTANT_OLLAMA_URL", None)
-    for pattern in ("test_sessions.py", "test_context.py", "test_personal.py", "test_outcomes.py"):
+    for pattern in ("test_sessions.py", "test_context.py", "test_personal.py", "test_outcomes.py", "test_conversations.py", "test_file_tools.py", "test_procedures.py", "test_proactive.py"):
         subprocess.run([str(runtime / "python.exe"), "-B", "-X", "utf8", "-m", "unittest", "discover", "-s", str(tests), "-p", pattern, "-v"], env=env, check=True, timeout=90)
     subprocess.run([str(runtime/'python.exe'),'-B','-X','utf8',str(tests/'native_editor_smoke.py')],env=env,check=True,timeout=60)
     from assistant.piper_voice import get_piper_path

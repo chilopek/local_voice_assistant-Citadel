@@ -169,7 +169,7 @@ class PersonalTests(unittest.TestCase):
         root = tk.Tk()
         root.withdraw()
         with patch('assistant.gui.PROJECT_ROOT',self.root):
-            gui = AssistantGUI(root,enable_hotkey=False,warm_voice=False,enable_scheduler=False)
+            gui = AssistantGUI(root,enable_hotkey=False,warm_voice=False,enable_scheduler=False,enable_history=False)
         try:
             self.store.add('reminder','Перерыв',0)
             gui._personal_path = self.store.path

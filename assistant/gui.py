@@ -19,6 +19,7 @@ from .speech import concise_speech
 from .paths import installed_uninstaller
 from .uninstall import begin_uninstall
 from .personal import PersonalScheduler, PersonalStore
+from .conversations import Conversations
 
 WAKE_WORD = "цитадель"
 HOTKEY = "Ctrl+Alt+C"
@@ -28,7 +29,7 @@ TEXT, MUTED, ACCENT = "#e8eaf0", "#929aaa", "#a9c7a5"
 
 
 class AssistantGUI:
-    def __init__(self, root: tk.Tk, *, enable_hotkey: bool = True, warm_voice: bool = True, enable_scheduler: bool = True) -> None:
+    def __init__(self, root: tk.Tk, *, enable_hotkey: bool = True, warm_voice: bool = True, enable_scheduler: bool = True, enable_history: bool = True) -> None:
         self.root = root
         root.title(f"Citadel {__version__.removesuffix('.0')} — локальный помощник")
         width = min(1220, max(900, root.winfo_screenwidth() - 80))
@@ -40,6 +41,12 @@ class AssistantGUI:
         WORKSPACE.mkdir(parents=True, exist_ok=True)
         self.memory = Memory(PROJECT_ROOT / "data" / "memory.sqlite3")
         self.messages: list[dict[str, Any]] = self._initial_messages()
+        self.history = Conversations(PROJECT_ROOT / 'data/conversations.sqlite3',timeout=.2) if enable_history else None
+        self._chat_id = None
+        self._turn_id = None
+        self.suggestions_enabled = threading.Event()
+        if self.history and self.history.setting('suggestions',False): self.suggestions_enabled.set()
+        self.proactive = None
         self.stop_event: threading.Event | None = None
         self.cancel_event = threading.Event()
         self.closed = threading.Event()
@@ -81,12 +88,17 @@ class AssistantGUI:
         root.protocol("WM_DELETE_WINDOW", self.close)
         self._poll_id = root.after(60, self._drain_events)
         self._welcome()
+        if self.history:
+            self._restore_dialog(self.history.current())
         self.entry.focus_set()
         if warm_voice and VOICE_ENABLED:
             self._ensure_voice()
         if enable_scheduler:
             self.scheduler = PersonalScheduler(lambda item: self.events.put(('notice', item)), self._personal_path)
             self.scheduler.start()
+            from .proactive import ProactiveMonitor
+            self.proactive = ProactiveMonitor(lambda text:self.events.put(('suggestion',text)),WORKSPACE,self.suggestions_enabled,lambda:self.busy)
+            self.proactive.start()
 
     def _initial_messages(self) -> list[dict[str, Any]]:
         return [{"role": "system", "content": SYSTEM_PROMPT + "\n" + self.memory.prompt_context()}]
@@ -314,6 +326,7 @@ class AssistantGUI:
         if not self.busy:
             return
         self.cancel_event.set()
+        self._checkpoint_interruption()
         worker, self.worker = self.worker, None
         # Invalidate queued events BEFORE killing. Late results cannot touch the new task.
         self._session_id = None
@@ -326,11 +339,22 @@ class AssistantGUI:
         if worker:
             worker.stop()
         self._finish_session(self.cancel_event)
+        if self.history and self._chat_id:
+            try:
+                self.messages = self.history.repair_transcript(self.history.load(self._chat_id)['messages'])
+            except (OSError,ValueError):
+                self.messages = self.history.repair_transcript(self.messages)
         self._log_activity("Задача остановлена", "Выполнение и озвучка прерваны. Можно отправить новую задачу.")
 
     def _start_process(self, mode: str, text: str = "") -> None:
         self._agent_running = True
         payload = {"mode": mode, "text": text, "messages": self.messages, "speak": False}
+        if self.history and self._chat_id:
+            import re
+            continuation = bool(re.fullmatch(r'\s*(?:продолжи|продолжай|continue|resume)[.!\s]*', text, re.I))
+            task = self.history.begin(self._chat_id, text, self.messages, resume=continuation)
+            self._turn_id = task['turn_id']
+            payload.update(task, history_path=str(self.history.path))
         if self.worker and not self.worker.stopped.is_set() and self.worker.process and self.worker.process.poll() is None:
             self._session_id = self.worker.id
             self.worker.send({"command": "new_task", "payload": payload})
@@ -474,6 +498,9 @@ class AssistantGUI:
         if self.busy:
             return
         self.messages = self._initial_messages()
+        if self.history:
+            self._chat_id = self.history.create()
+            self._turn_id = None
         for widget in (self.transcript, self.activity):
             widget.configure(state="normal")
             widget.delete("1.0", "end")
@@ -481,6 +508,30 @@ class AssistantGUI:
         self.status_var.set("Готов к новой задаче")
         self._welcome()
         self.entry.focus_set()
+
+    def _checkpoint_interruption(self) -> None:
+        if self.history and self._chat_id and self._turn_id:
+            import sqlite3
+            try:
+                self.history.interrupt(self._chat_id, self._turn_id)
+            except (OSError,sqlite3.Error):
+                import logging
+                logging.getLogger(__name__).exception('Не удалось отметить остановку в истории; процесс всё равно будет остановлен')
+
+    def _restore_dialog(self, chat: dict) -> None:
+        self._chat_id, self._turn_id = chat['id'], chat['turn_id']
+        if chat['status'] == 'running':
+            self._checkpoint_interruption()
+            chat['status'] = 'interrupted'
+        restored = self.history.repair_transcript(chat['messages'])
+        self.messages = self._initial_messages() + [m for m in restored if m.get('role') != 'system']
+        for message in self.messages[-30:]:
+            if message.get('role') in {'user', 'assistant'} and message.get('content') and not message.get('tool_calls'):
+                self._append_message('Вы' if message['role'] == 'user' else 'Citadel', str(message['content'])[:12000])
+        if chat['status'] in {'interrupted', 'blocked', 'partial'}:
+            self._append_message('Сохранённая задача', 'Выполнение было прервано. Проверьте результат последнего действия; отправьте «продолжи», чтобы продолжить.', system=True)
+        elif chat['status'] in {'waiting_input', 'waiting_auth'}:
+            self.status_var.set('Жду уточнение или завершение входа на сайт')
 
     def _uninstall(self) -> None:
         if self.busy or self.closed.is_set():
@@ -580,6 +631,15 @@ class AssistantGUI:
                 break
             if event == 'notice':
                 self._pending_notices.append(payload)
+                continue
+            if event == 'suggestion':
+                if self.suggestions_enabled.is_set() and not self.busy:
+                    self._append_message('Citadel · подсказка',str(payload),system=True)
+                    self.messages.append({'role':'assistant','content':str(payload)})
+                    if self.speak_var.get() and self._voice_ready and self._voice_speech_ready and self.voice_host:
+                        self._notice_speech = self._awaiting_speech = True
+                        self.stop_button.configure(state='normal')
+                        self.voice_host.send({'command':'speak','token':self._voice_token,'text':str(payload)})
                 continue
             if event == 'voice_setup':
                 sid, kind, data = payload
@@ -707,6 +767,83 @@ class AssistantGUI:
         memories = ttk.Frame(notebook, padding=12)
         notebook.add(reminders, text='Напоминания и наблюдения')
         notebook.add(memories, text='Постоянная память')
+        suggestions = tk.BooleanVar(value=self.suggestions_enabled.is_set())
+        def change_suggestions():
+            if suggestions.get(): self.suggestions_enabled.set()
+            else: self.suggestions_enabled.clear()
+            if self.history: self.history.set_setting('suggestions',suggestions.get())
+        ttk.Checkbutton(reminders,text='Ненавязчивые подсказки: перерыв и мало места на диске',variable=suggestions,command=change_suggestions).pack(anchor='w')
+        ttk.Label(reminders,text='Без опроса модели. Подсказки молчат ночью, при бездействии, во время задачи и полноэкранного приложения.',wraplength=650).pack(anchor='w',pady=(0,8))
+        from .procedures import Procedures
+        procedures = Procedures(self.memory.path.with_name('procedures.sqlite3'))
+        learned = ttk.Frame(notebook, padding=12)
+        notebook.add(learned, text='Опыт')
+        ttk.Label(learned,text='Успешные способы работы помогают выбрать инструменты.\nЭто подсказки: разрешения и результаты проверяются заново.',wraplength=650).pack(anchor='w',pady=8)
+        routes = ttk.Treeview(learned,columns=('words','route'),show='headings')
+        routes.heading('words',text='Похожая задача')
+        routes.heading('route',text='Порядок инструментов')
+        routes.pack(fill='both',expand=True)
+        route_items = {}
+        def refresh_routes():
+            route_items.clear(); routes.delete(*routes.get_children())
+            for index, item in enumerate(procedures.list()):
+                route_items[str(index)] = item['signature']
+                routes.insert('','end',iid=str(index),values=(', '.join(item['words']),' → '.join(item['tools'])))
+        def forget_route():
+            for selected_route in routes.selection(): procedures.forget(route_items[selected_route])
+            refresh_routes()
+        ttk.Button(learned,text='Забыть выбранный способ',command=forget_route).pack(anchor='w',pady=8)
+        ttk.Button(learned,text='Обновить',command=refresh_routes).pack(anchor='w')
+        refresh_routes()
+        if self.history:
+            history_tab = ttk.Frame(notebook, padding=12)
+            notebook.add(history_tab, text='История задач')
+            chats = ttk.Treeview(history_tab, columns=('status', 'title'), show='headings', height=7)
+            chats.heading('status', text='Состояние')
+            chats.heading('title', text='Задача')
+            chats.column('status', width=125, stretch=False)
+            chats.pack(fill='both', expand=True)
+            detail = tk.Text(history_tab, height=8, wrap='word', bg=PANEL, fg=TEXT, relief='flat')
+            detail.pack(fill='both', expand=True, pady=8)
+            statuses = {'running':'Выполняется','complete':'Готово','idle':'Новая','interrupted':'Прервана','cancelled':'Остановлена','blocked':'Нужна помощь','partial':'Частично','waiting_input':'Уточнение','waiting_auth':'Нужен вход'}
+            def refresh_history():
+                chats.delete(*chats.get_children())
+                for chat in self.history.recent():
+                    chats.insert('', 'end', iid=chat['id'], values=(statuses.get(chat['status'],chat['status']),chat['title']))
+            def show_receipts(_event=None):
+                if not chats.selection(): return
+                chat = self.history.load(chats.selection()[0])
+                lines = ['Задача: '+chat['goal']]
+                if chat['plan']: lines.extend(['План:', *chat['plan']])
+                for receipt in reversed(self.history.receipts(chat['id'])):
+                    lines.append(('✓ ' if receipt['ok'] else '× ')+receipt['tool']+' '+receipt['details'])
+                detail.configure(state='normal')
+                detail.delete('1.0','end')
+                detail.insert('1.0','\n'.join(lines))
+                detail.configure(state='disabled')
+            def open_history():
+                if self.busy or not chats.selection(): return
+                chat = self.history.activate(chats.selection()[0])
+                self.transcript.configure(state='normal')
+                self.transcript.delete('1.0','end')
+                self.transcript.configure(state='disabled')
+                self._restore_dialog(chat)
+                window.destroy()
+            def forget_history():
+                if self.busy or not chats.selection(): return
+                identifier = chats.selection()[0]
+                self.history.forget(identifier)
+                if identifier == self._chat_id: self._clear_dialog()
+                refresh_history()
+                detail.configure(state='normal'); detail.delete('1.0','end'); detail.configure(state='disabled')
+            chats.bind('<<TreeviewSelect>>', show_receipts)
+            buttons = ttk.Frame(history_tab)
+            buttons.pack(fill='x')
+            ttk.Button(buttons,text='Открыть диалог',command=open_history).pack(side='left')
+            ttk.Button(buttons,text='Забыть выбранное',command=forget_history).pack(side='left',padx=8)
+            ttk.Button(buttons,text='Обновить',command=refresh_history).pack(side='right')
+            ttk.Label(history_tab,text='История хранится локально. Открытие диалога само не запускает действия.',wraplength=650).pack(anchor='w',pady=8)
+            refresh_history()
         voice_settings = ttk.Frame(notebook,padding=16)
         notebook.add(voice_settings,text='Голос')
         ttk.Label(voice_settings,text='Распознавание речи',style='Title.TLabel').pack(anchor='w')
@@ -744,7 +881,7 @@ class AssistantGUI:
         ttk.Label(model_settings,text='Модель определяет качество рассуждений',style='Title.TLabel').pack(anchor='w')
         ttk.Label(model_settings,text='Маленькая модель может ошибаться в составных поручениях.\nБолее крупная требует больше RAM/VRAM и может отвечать медленнее.\nЗагрузка начнётся только после нажатия кнопки.',wraplength=700).pack(anchor='w',pady=14)
         agent_model = tk.StringVar(value=MODEL)
-        ttk.Combobox(model_settings,textvariable=agent_model,values=tuple(dict.fromkeys([MODEL,'qwen3:8b','qwen3:14b'])),width=38).pack(anchor='w')
+        ttk.Combobox(model_settings,textvariable=agent_model,values=tuple(dict.fromkeys([MODEL,'qwen3.5:4b','qwen3.5:9b','qwen3:8b','qwen3:14b'])),width=38).pack(anchor='w')
         def prepare_agent():
             if self._voice_setup and not self._voice_setup.stopped.is_set() and (self._voice_setup.process is None or self._voice_setup.process.poll() is None):
                 self.voice_setup_var.set('Дождитесь текущей подготовки или остановите её.')
@@ -815,10 +952,13 @@ class AssistantGUI:
 
     def close(self) -> None:
         self.closed.set()
+        self._checkpoint_interruption()
         if self._voice_setup:
             self._voice_setup.stop()
         if self.scheduler:
             self.scheduler.stop()
+        if self.proactive:
+            self.proactive.stop()
         self.cancel_event.set()
         self._session_id = None
         if self.voice_host:

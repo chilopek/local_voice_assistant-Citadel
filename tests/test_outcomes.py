@@ -12,6 +12,15 @@ from assistant.system_tools import find_files,system_status
 
 
 class OutcomeTests(unittest.TestCase):
+    def test_preserving_rest_of_existing_file_is_an_edit_not_new_file_creation(self):
+        state=Outcomes('Найди текстовый файл, замени Alpha на Beta. Остальной текст сохрани. Выполни правку файла.',Path.cwd())
+        self.assertFalse(state.file)
+        self.assertTrue(state.edit)
+        self.assertEqual(app._task_tools(state.text)[1],{'files'})
+        self.assertIn('правка',state.missing()[0])
+        state.observe('edit_file',{}, {'ok':True,'result':{'path':'a.txt','verified':True}})
+        self.assertFalse(state.missing())
+
     def test_double_escaped_python_transport_is_repaired_without_changing_strings(self):
         from assistant.code_text import python_source
         code=r'def decode(text):\n    return text.replace("\\n", "")\n'

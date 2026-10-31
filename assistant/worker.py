@@ -102,14 +102,24 @@ def main() -> int:
         def answer(text: str) -> None:
             emit("status", "Обрабатываю задачу…")
             spoken = {'value':None}
+            journal=None
+            if payload.get('history_path') and payload.get('chat_id') and payload.get('turn_id'):
+                from .conversations import Conversations
+                from pathlib import Path
+                journal=Conversations(Path(payload['history_path']))
             def progress(event):
+                if journal:
+                    try:
+                        journal.progress(payload['chat_id'],payload['turn_id'],messages,event)
+                    except Exception:
+                        traceback.print_exc(file=sys.stderr)
                 if event.get('type')=='done':
                     spoken['value'] = event.get('speech')
                 emit("agent", event)
                 if event.get("type") in {"thinking", "tool_result", "done"}:
                     emit("messages", messages)
             result = run_turn(client, memory, messages, text, confirm=confirm,
-                              on_event=progress, cancel_event=cancel)
+                              on_event=progress, cancel_event=cancel,goal_text=payload.get('goal_text'),resume_receipts=payload.get('resume_receipts'))
             if cancel.is_set():
                 return
             # Commit conversation before synthesis, so a speech failure loses no answer.

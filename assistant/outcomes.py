@@ -5,7 +5,14 @@ from pathlib import Path
 
 
 def wants_file(text: str) -> bool:
+    if wants_edit(text) and not re.search(r'создай\s+(?:новый|отдельный)|сохрани.{0,40}(?:отдельн|новый)\s+файл|save.{0,30}(?:new|separate)',text,re.I):
+        return False
     return bool(re.search(r'(?:сохран\w*|запиш\w*|созда\w*|напиши|write|save|create).{0,160}(?:файл|file\b)|(?:в\s+файл|into\s+(?:a\s+)?file)\b',text,re.I|re.S))
+
+
+def wants_edit(text: str) -> bool:
+    return bool(re.search(r'\b(?:измени|замени|исправь|отредактируй|поправь|edit|replace|modify)\b',text,re.I) and
+                re.search(r'файл|file\b|\.(?:py|txt|md|json|js|ts|html|css|csv|xml|toml|ini|yaml)\b',text,re.I))
 
 
 def wants_editor(text: str) -> bool:
@@ -20,6 +27,8 @@ def wants_media(text: str) -> bool:
 class Outcomes:
     def __init__(self,text: str,workspace: Path):
         self.file = wants_file(text)
+        self.edit = wants_edit(text)
+        self.edited = None
         self.editor = wants_editor(text)
         self.media = wants_media(text)
         self.text, self.workspace = text, workspace
@@ -59,9 +68,16 @@ class Outcomes:
                 self.last_error='Файл создан по другому пути: '+value['path']
         if name=='insert_text' and value.get('request_accepted'):
             self.inserted = value
+        if name in {'edit_file','restore_file_revision','write_file'} and self.edit and value.get('verified'):
+            expected=Path(self.destination) if self.destination else None
+            expected=(expected if expected.is_absolute() else self.workspace/expected).resolve() if expected else None
+            if value.get('path') and (expected is None or Path(value['path']).resolve()==expected):
+                self.edited = value
+            else:
+                self.last_error='Изменён другой файл: '+str(value.get('path',''))
         if name=='create_reminder' and value.get('due_at'):
             self.reminders.append(value)
-        if name=='read_file' and value.get('content') and re.search(r'прочитай|прочти|зачитай|озвучь',self.text,re.I) and not self.file:
+        if name in {'read_file','read_document'} and value.get('content') and re.search(r'прочитай|прочти|зачитай|озвучь|читай|читать',self.text,re.I) and not self.file:
             self.reading = value
         media = value.get('media') or value.get('snapshot',{}).get('media') or []
         if any(item.get('paused') is False and item.get('ready_state',0)>=2 for item in media):
@@ -69,6 +85,7 @@ class Outcomes:
 
     def missing(self):
         return (["создание файла через write_file" + (' в '+str(self.workspace) if self.requested_root else '')] if self.file and not self.saved else []) + \
+               (["проверенная правка существующего файла"] if self.edit and not self.edited else []) + \
                (["вставка текста в наблюдённый редактор через insert_text"] if self.editor and not self.inserted else []) + \
                (["подтверждение воспроизведения музыки/видео"] if self.media and not self.playing else [])
 
@@ -89,6 +106,8 @@ class Outcomes:
             return 'Не подтверждено: '+ '; '.join(missing)+'. '+(self.last_error or 'Нужное действие не получило подтверждённого результата; задачу нельзя считать выполненной.')
         if self.file and self.saved and self.saved['path'] not in answer:
             answer += '\nФайл: '+self.saved['path']
+        if self.edit and self.edited and self.edited['path'] not in answer:
+            answer += '\nФайл: '+self.edited['path']
         if self.editor and self.inserted and not self.inserted.get('verified'):
             answer += '\nВставка отправлена, но полный текст редактора недоступен для проверки.'
         return answer

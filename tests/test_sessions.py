@@ -44,7 +44,7 @@ class SessionTests(unittest.TestCase):
         from assistant.gui import AssistantGUI
         root = tk.Tk()
         root.withdraw()
-        app = AssistantGUI(root, enable_hotkey=False, warm_voice=False, enable_scheduler=False)
+        app = AssistantGUI(root, enable_hotkey=False, warm_voice=False, enable_scheduler=False, enable_history=False)
         host = Mock(id="resident")
         app.voice_host = host
         app._voice_ready = app._voice_speech_ready = True
@@ -134,7 +134,7 @@ class SessionTests(unittest.TestCase):
         from assistant.gui import AssistantGUI
         root = tk.Tk()
         root.withdraw()
-        app = AssistantGUI(root, enable_hotkey=False, enable_scheduler=False)
+        app = AssistantGUI(root, enable_hotkey=False, enable_scheduler=False, enable_history=False)
         try:
             with patch.dict(os.environ, {"ASSISTANT_OLLAMA_URL": f"http://127.0.0.1:{server.server_port}", "ASSISTANT_VOICE": "off"}):
                 app.speak_var.set(False)
@@ -200,7 +200,7 @@ class SessionTests(unittest.TestCase):
         from assistant.gui import AssistantGUI
         root = tk.Tk()
         root.withdraw()
-        app = AssistantGUI(root, enable_hotkey=False, enable_scheduler=False)
+        app = AssistantGUI(root, enable_hotkey=False, enable_scheduler=False, enable_history=False)
         try:
             self.assertTrue(app._reserve_session(listening=True))
             app._session_id = "current"
@@ -222,7 +222,7 @@ class SessionTests(unittest.TestCase):
         import tkinter as tk
         from assistant.gui import AssistantGUI
         root = tk.Tk()
-        app = AssistantGUI(root, enable_hotkey=False, enable_scheduler=False)
+        app = AssistantGUI(root, enable_hotkey=False, enable_scheduler=False, enable_history=False)
         try:
             root.geometry("900x600")
             root.update()

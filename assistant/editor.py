@@ -24,7 +24,7 @@ def insert_text(window_handle: int, text: str, control_id: str = '', approved: b
     import ctypes
     import pythoncom
     import win32clipboard
-    from pywinauto.keyboard import send_keys
+    from pywinauto.keyboard import VirtualKeyAction
     if not text or len(text)>100000:
         raise ValueError('Текст: от 1 до 100000 символов')
     if language=='python' or re.match(r'\s*(?:def\s+\w+\(|class\s+\w+|from\s+\w+\s+import\b)',text):
@@ -56,11 +56,15 @@ def insert_text(window_handle: int, text: str, control_id: str = '', approved: b
             raise PermissionError('Пароли пользователь вводит самостоятельно')
     except AttributeError:
         pass
-    window.set_focus()
-    target.set_focus()
+    native_handle = int(target.handle or 0)
+    native_class = target.class_name().casefold()
+    direct_native = bool(native_handle and (native_class=='edit' or native_class.startswith('richedit')))
+    if not direct_native:
+        window.set_focus()
+        target.set_focus()
     user32 = ctypes.windll.user32
     user32.GetForegroundWindow.restype = ctypes.c_void_p
-    if int(user32.GetForegroundWindow() or 0)!=int(window_handle):
+    if not direct_native and int(user32.GetForegroundWindow() or 0)!=int(window_handle):
         raise RuntimeError('Фокус ушёл из выбранного окна; текст не вставлен')
     saved = pythoncom.OleGetClipboard()
     try:
@@ -70,9 +74,25 @@ def insert_text(window_handle: int, text: str, control_id: str = '', approved: b
             win32clipboard.SetClipboardText(text,win32clipboard.CF_UNICODETEXT)
         finally:
             win32clipboard.CloseClipboard()
-        if int(user32.GetForegroundWindow() or 0)!=int(window_handle):
+        if not direct_native and int(user32.GetForegroundWindow() or 0)!=int(window_handle):
             raise RuntimeError('Фокус изменился до вставки; действие остановлено')
-        send_keys('^v',pause=.01)
+        if direct_native:
+            # Address the observed native control directly. A localized keyboard
+            # layout and a simultaneous focus change cannot redirect this paste.
+            user32.SendMessageTimeoutW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t,ctypes.c_uint,ctypes.c_uint,ctypes.POINTER(ctypes.c_size_t)]
+            user32.SendMessageTimeoutW.restype=ctypes.c_ssize_t
+            value=ctypes.c_size_t()
+            if not user32.SendMessageTimeoutW(native_handle,0x0302,0,0,2,1000,ctypes.byref(value)):
+                raise RuntimeError('Редактор не подтвердил обработку вставки. Проверь текст перед повтором.')
+        else:
+            # Use physical virtual keys, not a letter resolved through the current
+            # RU/EN layout (VkKeyScan("v") can return an invalid key under RU).
+            control=VirtualKeyAction(0x11,up=False)
+            control.run()
+            try:
+                VirtualKeyAction(0x56).run()
+            finally:
+                VirtualKeyAction(0x11,down=False).run()
         time.sleep(.15)
     finally:
         # Restore all clipboard formats through OLE, including images. Do not

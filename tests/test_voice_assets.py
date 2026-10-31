@@ -272,7 +272,11 @@ class PiperPreparationTests(unittest.TestCase):
     def setUp(self):
         import numpy as np
         self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
+        try:
+            from tests.temp_support import cleanup_directory
+        except ModuleNotFoundError:
+            from temp_support import cleanup_directory
+        self.addCleanup(cleanup_directory,self.directory)
         self.root = Path(self.directory.name)
         self.path = self.root / "cache" / voice_assets.PIPER_MODEL_NAME
         self.path.parent.mkdir()

@@ -27,8 +27,8 @@
 [Setup]
 AppId={#ProductId}
 AppName={#ProductName}
-AppVersion=0.8.0
-AppVerName={#ProductName} 0.8
+AppVersion=0.9.0
+AppVerName={#ProductName} 0.9
 DefaultDirName={localappdata}\Programs\{#ProductName}
 DisableDirPage=yes
 UsePreviousAppDir=no

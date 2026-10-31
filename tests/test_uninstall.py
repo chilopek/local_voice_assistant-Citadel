@@ -31,7 +31,7 @@ class UninstallTests(unittest.TestCase):
         import tkinter as tk
         from assistant.gui import AssistantGUI
         root = tk.Tk()
-        app = AssistantGUI(root, enable_hotkey=False, enable_scheduler=False)
+        app = AssistantGUI(root, enable_hotkey=False, enable_scheduler=False, enable_history=False)
         try:
             with patch("assistant.gui.messagebox.askyesno", return_value=False), patch("assistant.gui.begin_uninstall") as launch:
                 app._uninstall()
@@ -45,7 +45,7 @@ class UninstallTests(unittest.TestCase):
         import tkinter as tk
         from assistant.gui import AssistantGUI
         root = tk.Tk()
-        app = AssistantGUI(root, enable_hotkey=False, enable_scheduler=False)
+        app = AssistantGUI(root, enable_hotkey=False, enable_scheduler=False, enable_history=False)
         with patch("assistant.gui.messagebox.askyesno", return_value=True), patch("assistant.gui.begin_uninstall") as launch:
             app._uninstall()
         launch.assert_called_once()

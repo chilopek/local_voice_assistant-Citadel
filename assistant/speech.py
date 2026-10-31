@@ -28,8 +28,8 @@ def outcome_speech(outcomes, answer: str) -> dict | None:
         return {'text':' '.join(reminder_text(item,False) for item in outcomes.reminders),'verbatim':True}
     if outcomes.reading:
         item = outcomes.reading
-        text = item['content'][:6000]
-        if item.get('truncated') or len(item['content'])>6000:
+        text = item['content']
+        if item.get('truncated'):
             text += '\nЭто первая часть файла. Для продолжения попросите прочитать дальше.'
         return {'text':text,'verbatim':True}
     return None

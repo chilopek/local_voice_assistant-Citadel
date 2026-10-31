@@ -8,6 +8,7 @@ import platform
 import subprocess
 import sys
 import webbrowser
+import hashlib
 from contextvars import ContextVar
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -52,11 +53,12 @@ def read_file(path: str, max_chars: int = 12000, start: int = 0) -> dict[str, An
         raise ValueError(f"Файл не найден: {path}")
     max_chars = max(100, min(int(max_chars), 16000))
     start = max(0,min(int(start),10000000))
-    with file_path.open(encoding="utf-8-sig", errors="replace") as source:
-        source.read(start)
-        text = source.read(max_chars + 1)
+    from .file_tools import read_text, digest
+    raw,full_text,encoding=read_text(file_path)
+    text=full_text[start:start+max_chars+1]
     return {"path": str(file_path), "content": text[:max_chars], "start":start,
-            "next_start":start+max_chars if len(text)>max_chars else None,"truncated": len(text) > max_chars}
+            "next_start":start+max_chars if len(text)>max_chars else None,"truncated": len(text) > max_chars,
+            'sha256':digest(raw),'encoding':encoding,'total_chars':len(full_text)}
 
 
 def write_file(path: str, content: str, validate_python: bool = False) -> dict[str, Any]:
@@ -72,7 +74,9 @@ def write_file(path: str, content: str, validate_python: bool = False) -> dict[s
     with file_path.open("w" if _confirmed_execution.get() else "x", encoding="utf-8") as output:
         output.write(content)
     verified = file_path.read_text(encoding='utf-8')==content
-    return {"path": str(file_path), "bytes": file_path.stat().st_size,'verified':verified,'syntax_checked':validate_python,'normalized_linebreaks':normalized}
+    with file_path.open('rb') as source:
+        digest=hashlib.file_digest(source,'sha256').hexdigest()
+    return {"path": str(file_path), "bytes": file_path.stat().st_size,'verified':verified,'syntax_checked':validate_python,'normalized_linebreaks':normalized,'sha256':digest}
 
 
 def open_path(path: str) -> dict[str, Any]:
@@ -357,6 +361,15 @@ def update_plan(steps: list[str]) -> dict:
     return {"steps": steps, "note": "Это план, а не результат выполнения. Продолжай действовать инструментами."}
 
 
+def ask_user(question: str) -> dict:
+    if not isinstance(question,str) or not question.strip() or len(question)>1500:
+        raise ValueError('Задай один короткий вопрос, до 1500 символов')
+    return {'question':question.strip(),'needs_input':True}
+
+
+from .file_tools import read_document, search_file_contents, edit_file, restore_file_revision
+
+
 def _schema(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": {"type": "object", "properties": properties, "required": required or [], "additionalProperties": False}}}
 
@@ -374,6 +387,8 @@ def insert_text(window_handle: int, text: str, control_id: str = '', language: s
     return paste(window_handle,text,control_id,approved=_confirmed_execution.get(),language=language)
 
 TOOL_FUNCTIONS.update({name: function for name, function in {
+    'read_document':read_document,'search_file_contents':search_file_contents,
+    'edit_file':edit_file,'restore_file_revision':restore_file_revision,
     "get_environment": get_environment, "search_web": search_web, "fetch_url": fetch_url,
     "run_python": run_python, "download_file": download_file,
     "browser_open": browser_open, "browser_snapshot": browser_snapshot, "browser_action": browser_action,
@@ -388,11 +403,17 @@ TOOL_FUNCTIONS.update({name: function for name, function in {
     "system_status":system_status,"list_processes":list_processes,"find_files":find_files,
     "insert_text":insert_text,
     "browser_media":browser_media,
+    "ask_user":ask_user,
 }.items()})
 
 _str = {"type": "string"}
 _int = {"type": "integer"}
 TOOL_SCHEMAS.extend([
+    _schema('read_document','Прочитать текст PDF/DOCX/XLSX/PPTX без запуска Office и макросов. Для сканов PDF нужен OCR; текстовый слой может отсутствовать. Для продолжения передай next_start как start.',{'path':_str,'start':_int,'max_chars':_int},['path']),
+    _schema('search_file_contents','Найти буквальную строку внутри текстовых файлов в выбранной папке. Возвращает путь, номер строки, фрагмент и SHA256. Поиск ограничен временем/размером, truncated означает неполный результат.',{'query':_str,'path':_str,'max_results':_int},['query']),
+    _schema('edit_file','Точечно заменить ровно один фрагмент существующего текстового файла. Сначала read_file: expected_sha256 из актуального чтения. Автоматически сохраняет резервную версию. Изменение подтверждает пользователь.',{'path':_str,'old_text':_str,'new_text':_str,'expected_sha256':_str,'validate_python':{'type':'boolean'}},['path','old_text','new_text','expected_sha256']),
+    _schema('restore_file_revision','По просьбе пользователя восстановить резервную версию после edit_file. expected_sha256 должен совпадать с SHA256 изменённого файла. Более поздние изменения не перезаписываются. Требует подтверждения.',{'revision_id':_str,'expected_sha256':_str},['revision_id','expected_sha256']),
+    _schema('ask_user','Запросить обязательный недостающий параметр и приостановить текущую задачу до ответа пользователя. Не использовать для обычных безопасных действий или выбора имени нового файла.',{'question':_str},['question']),
     _schema('browser_media','Воспроизвести или приостановить наблюдённый HTML audio/video. action: play/pause, index из media в browser_snapshot. Для авторизации сначала browser_open(visible=true), вход пользователь выполняет сам.',{'action':_str,'index':_int}),
     _schema('system_status','Снять реальные показатели CPU, RAM, места на дисках и скорости дисковых операций. Чтение без подтверждения.',{'sample_seconds':{'type':'number'}}),
     _schema('list_processes','Список процессов с PID и памятью, либо замер CPU. Чтение без завершения процессов.',{'sort_by':_str,'limit':_int}),
@@ -472,9 +493,9 @@ def needs_confirmation(name: str, arguments: dict[str, Any]) -> bool:
     return name not in {"get_time", "get_environment", "read_file", "list_files",
                         "search_web", "fetch_url", "open_url", "browser_open", "browser_search",
                         "browser_snapshot", "desktop_snapshot", "take_screenshot", "read_screen",
-                        "get_location", "update_plan", "select_tools", "create_reminder", "list_reminders",
+                        "get_location", "update_plan", "select_tools", "create_reminder", "list_reminders", 'read_document','search_file_contents',
                         "cancel_reminder", "snooze_reminder", "watch_process", "watch_file",
-                        "remember_fact", "list_memory", "forget_fact", "system_status","list_processes","find_files","browser_media"}
+                        "remember_fact", "list_memory", "forget_fact", "system_status","list_processes","find_files","browser_media","ask_user"}
 
 
 def confirmation_reason(name: str, arguments: dict[str, Any]) -> str:
