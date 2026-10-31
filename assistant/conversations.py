@@ -140,7 +140,7 @@ class Conversations:
                 # The transcript already has full tool output. Receipts contain
                 # bounded metadata, not a second copy of files/screenshots.
                 value=result.get('result')
-                keys=('path','url','bytes','verified','request_accepted','syntax_checked','login_required','error','sha256','id','title','due_at','characters','window_handle')
+                keys=('path','url','bytes','verified','request_accepted','syntax_checked','login_required','error','sha256','revision_id','id','title','due_at','characters','window_handle')
                 details={key:value[key] for key in keys if isinstance(value,dict) and key in value}
                 if event.get('effect_key'):details['effect_key']=event['effect_key']
                 if result.get('error'):details['error']=str(result['error'])[:500]
@@ -184,7 +184,7 @@ class Conversations:
 
 
 def effect_key(name,args):
-    if name not in {'write_file','insert_text','create_reminder','watch_process','watch_file'}:return None
+    if name not in {'write_file','edit_file','restore_file_revision','insert_text','create_reminder','watch_process','watch_file'}:return None
     return hashlib.sha256(json.dumps([name,args],ensure_ascii=False,sort_keys=True,default=str).encode()).hexdigest()
 
 
@@ -193,7 +193,7 @@ def resumed_effect(name,args,receipts):
     if not key:return None
     previous=next((item['result'] for item in reversed(receipts or []) if item.get('name')==name and item.get('result',{}).get('effect_key')==key),None)
     if previous is None:return None
-    if name=='write_file':
+    if name in {'write_file','edit_file','restore_file_revision'}:
         path=Path(previous.get('path',''))
         if not previous.get('sha256') or not path.is_file():
             raise ValueError('Ранее подтверждённый файл сейчас не найден. Уточни у пользователя новое создание.')

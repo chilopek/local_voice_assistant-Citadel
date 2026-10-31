@@ -73,11 +73,12 @@ class Outcomes:
             expected=(expected if expected.is_absolute() else self.workspace/expected).resolve() if expected else None
             if value.get('path') and (expected is None or Path(value['path']).resolve()==expected):
                 self.edited = value
+                self.reading = None
             else:
                 self.last_error='Изменён другой файл: '+str(value.get('path',''))
         if name=='create_reminder' and value.get('due_at'):
             self.reminders.append(value)
-        if name in {'read_file','read_document'} and value.get('content') and re.search(r'прочитай|прочти|зачитай|озвучь|читай|читать',self.text,re.I) and not self.file:
+        if name in {'read_file','read_document'} and value.get('content') and re.search(r'прочитай|прочти|зачитай|озвучь|читай|читать',self.text,re.I) and not self.file and (not self.edit or self.edited):
             self.reading = value
         media = value.get('media') or value.get('snapshot',{}).get('media') or []
         if any(item.get('paused') is False and item.get('ready_state',0)>=2 for item in media):

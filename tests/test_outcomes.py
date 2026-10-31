@@ -12,6 +12,13 @@ from assistant.system_tools import find_files,system_status
 
 
 class OutcomeTests(unittest.TestCase):
+    def test_speech_never_reads_pre_edit_content_as_current_file(self):
+        state=Outcomes('Прочитай файл a.txt и исправь текст',Path.cwd())
+        state.observe('read_file',{}, {'ok':True,'result':{'path':str(Path.cwd()/'a.txt'),'content':'before'}})
+        state.observe('edit_file',{}, {'ok':True,'result':{'path':str(Path.cwd()/'a.txt'),'verified':True}})
+        self.assertIsNone(state.reading)
+        state.observe('read_file',{}, {'ok':True,'result':{'path':str(Path.cwd()/'a.txt'),'content':'after'}})
+        self.assertEqual(outcome_speech(state,'Готово')['text'],'after')
     def test_preserving_rest_of_existing_file_is_an_edit_not_new_file_creation(self):
         state=Outcomes('Найди текстовый файл, замени Alpha на Beta. Остальной текст сохрани. Выполни правку файла.',Path.cwd())
         self.assertFalse(state.file)

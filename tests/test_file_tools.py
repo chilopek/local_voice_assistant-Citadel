@@ -30,10 +30,14 @@ class FileToolTests(unittest.TestCase):
         with self.assertRaises(PermissionError): tools.execute('edit_file',args)
         changed=tools.execute('edit_file',args,confirmed=True)
         self.assertTrue(changed['verified'])
+        versions=tools.execute('list_file_revisions',{'path':str(target)})
+        self.assertEqual(versions[0]['revision_id'],changed['revision_id'])
+        self.assertTrue(versions[0]['can_restore'])
         self.assertIn(b'\r\n',target.read_bytes())
         with self.assertRaises(ValueError): tools.execute('edit_file',args,confirmed=True)
         restored=tools.execute('restore_file_revision',{'revision_id':changed['revision_id'],'expected_sha256':changed['sha256']},confirmed=True)
         self.assertTrue(restored['verified']); self.assertEqual(target.read_bytes(),original)
+        self.assertFalse(tools.execute('list_file_revisions',{'path':str(target)})[0]['can_restore'])
 
     def test_edit_ambiguous_or_invalid_python_never_touches_original(self):
         target=self.root/'code.py'; target.write_text('x = 1\nx = 1\n')

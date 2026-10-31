@@ -77,6 +77,24 @@ class ConversationTests(unittest.TestCase):
     def test_screenshots_are_not_stored_in_history(self):
         self.assertNotIn('secret-image', Conversations.encode([{'role':'user','content':'test','images':['secret-image']}]))
 
+    def test_verified_edit_survives_interruption_and_is_not_applied_twice(self):
+        path=self.root/'note.txt'; path.write_text('Beta')
+        parameters={'path':str(path),'old_text':'Alpha','new_text':'Beta','expected_sha256':'old hash'}
+        value={'path':str(path),'verified':True,'revision_id':'owned-revision','sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+        task=self.store.begin(self.chat,'Замени Alpha на Beta в файле note.txt',[])
+        self.store.progress(self.chat,task['turn_id'],[],{'type':'tool_result','name':'edit_file','effect_key':effect_key('edit_file',parameters),'result':{'ok':True,'result':value}})
+        self.store.interrupt(self.chat,task['turn_id'])
+        resumed=self.store.begin(self.chat,'продолжи',[],resume=True)
+        checkpoint=resumed_effect('edit_file',parameters,resumed['resume_receipts'])
+        self.assertTrue(checkpoint['reused_checkpoint'])
+        self.assertEqual(checkpoint['revision_id'],'owned-revision')
+        model=Mock()
+        model.chat.return_value={'message':{'content':'Изменение уже подтверждено.'}}
+        with patch.object(app,'PROJECT_ROOT',self.root),patch.object(app,'WORKSPACE',self.root),patch.object(app,'execute') as execute:
+            answer=app.run_turn(model,Memory(self.root/'memory.sqlite'),[],'продолжи',goal_text=resumed['goal_text'],resume_receipts=resumed['resume_receipts'])
+        execute.assert_not_called()
+        self.assertNotIn('Не подтверждено',answer)
+
     def test_agent_waits_for_answer_then_saves_file_for_original_goal(self):
         model = Mock()
         model.chat.return_value = {'message':{'tool_calls':[{'function':{'name':'ask_user','arguments':{'question':'Какой шифр нужен?'}}}]}}

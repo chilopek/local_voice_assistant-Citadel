@@ -367,7 +367,7 @@ def ask_user(question: str) -> dict:
     return {'question':question.strip(),'needs_input':True}
 
 
-from .file_tools import read_document, search_file_contents, edit_file, restore_file_revision
+from .file_tools import read_document, search_file_contents, edit_file, restore_file_revision, list_file_revisions
 
 
 def _schema(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -388,7 +388,7 @@ def insert_text(window_handle: int, text: str, control_id: str = '', language: s
 
 TOOL_FUNCTIONS.update({name: function for name, function in {
     'read_document':read_document,'search_file_contents':search_file_contents,
-    'edit_file':edit_file,'restore_file_revision':restore_file_revision,
+    'edit_file':edit_file,'restore_file_revision':restore_file_revision,'list_file_revisions':list_file_revisions,
     "get_environment": get_environment, "search_web": search_web, "fetch_url": fetch_url,
     "run_python": run_python, "download_file": download_file,
     "browser_open": browser_open, "browser_snapshot": browser_snapshot, "browser_action": browser_action,
@@ -409,6 +409,7 @@ TOOL_FUNCTIONS.update({name: function for name, function in {
 _str = {"type": "string"}
 _int = {"type": "integer"}
 TOOL_SCHEMAS.extend([
+    _schema('list_file_revisions','Показать резервные версии после правок edit_file: revision_id, path, expected_sha256, created, can_restore. Используй перед восстановлением по просьбе пользователя. Исходное содержимое не возвращает.',{'path':_str}),
     _schema('read_document','Прочитать текст PDF/DOCX/XLSX/PPTX без запуска Office и макросов. Для сканов PDF нужен OCR; текстовый слой может отсутствовать. Для продолжения передай next_start как start.',{'path':_str,'start':_int,'max_chars':_int},['path']),
     _schema('search_file_contents','Найти буквальную строку внутри текстовых файлов в выбранной папке. Возвращает путь, номер строки, фрагмент и SHA256. Поиск ограничен временем/размером, truncated означает неполный результат.',{'query':_str,'path':_str,'max_results':_int},['query']),
     _schema('edit_file','Точечно заменить ровно один фрагмент существующего текстового файла. Сначала read_file: expected_sha256 из актуального чтения. Автоматически сохраняет резервную версию. Изменение подтверждает пользователь.',{'path':_str,'old_text':_str,'new_text':_str,'expected_sha256':_str,'validate_python':{'type':'boolean'}},['path','old_text','new_text','expected_sha256']),
@@ -493,7 +494,7 @@ def needs_confirmation(name: str, arguments: dict[str, Any]) -> bool:
     return name not in {"get_time", "get_environment", "read_file", "list_files",
                         "search_web", "fetch_url", "open_url", "browser_open", "browser_search",
                         "browser_snapshot", "desktop_snapshot", "take_screenshot", "read_screen",
-                        "get_location", "update_plan", "select_tools", "create_reminder", "list_reminders", 'read_document','search_file_contents',
+                        "get_location", "update_plan", "select_tools", "create_reminder", "list_reminders", 'read_document','search_file_contents','list_file_revisions',
                         "cancel_reminder", "snooze_reminder", "watch_process", "watch_file",
                         "remember_fact", "list_memory", "forget_fact", "system_status","list_processes","find_files","browser_media","ask_user"}
 

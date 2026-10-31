@@ -99,7 +99,7 @@ TOOL_GROUPS = {
     "opening": {"open_url", "launch_program"},
     "web": {"search_web", "fetch_url", "browser_search", "browser_open"},
     "browser": {"browser_open", "browser_search", "browser_snapshot", "browser_action", "browser_media", "search_web", "fetch_url", "open_url"},
-    "files": {"list_files", "find_files", "read_file", "write_file", "open_file", "open_path", "download_file",'read_document','search_file_contents','edit_file','restore_file_revision'},
+    "files": {"list_files", "find_files", "read_file", "write_file", "open_file", "open_path", "download_file",'read_document','search_file_contents','edit_file','restore_file_revision','list_file_revisions'},
     "desktop": {"desktop_snapshot", "desktop_action", "insert_text", "take_screenshot", "read_screen", "launch_program"},
     "python": {"run_python", "run_powershell"},
 }
@@ -469,9 +469,9 @@ def run_turn(
         client.num_predict = 2048 if outcomes.file or outcomes.editor else None
     from .conversations import effect_key,resumed_effect
     for prior in resume_receipts or []:
-        if prior.get('name') in {'write_file','insert_text'}:
+        if prior.get('name') in {'write_file','edit_file','restore_file_revision','insert_text'}:
             metadata=prior.get('result',{})
-            if prior['name']=='write_file':
+            if prior['name'] in {'write_file','edit_file','restore_file_revision'}:
                 try:
                     path=Path(metadata.get('path',''))
                     with path.open('rb') as source:
@@ -754,6 +754,12 @@ def run_turn(
             event('done', answer=answer, speech=outcome_speech(outcomes,answer))
             return answer
         simple_artifact = groups=={'files'} and not re.search(r'проверь|прочитай|прочти|объясни|расскажи|открой|покажи|explain|verify|read\b|open\b',user_text,re.I)
+        simple_edit = simple_artifact and not re.search(r'затем|потом|также|после\s+этого|создай|скачай|откати|отмени|зачитай|озвучь|then\b|also\b|create\b|download\b|undo\b',execution_text,re.I)
+        if simple_edit and outcomes.edit and outcomes.edited and not outcomes.missing():
+            answer='Файл изменён и проверен: '+outcomes.edited['path']
+            messages.append({'role':'assistant','content':answer})
+            event('done',answer=answer,speech=outcome_speech(outcomes,answer))
+            return answer
         if (automatic_file or simple_artifact) and not outcomes.missing() and outcomes.saved:
             answer = 'Файл создан и проверен: '+outcomes.saved['path']
             messages.append({'role':'assistant','content':answer})

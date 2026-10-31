@@ -95,6 +95,24 @@ def restore_file_revision(revision_id: str, expected_sha256: str):
     return {'path':str(target),'restored':True,'verified':target.read_bytes()==row[1],'sha256':digest(row[1])}
 
 
+def list_file_revisions(path: str=''):
+    from .tools import _resolve_workspace_path
+    import datetime as dt
+    with closing(_revisions()) as db:
+        if path:
+            rows=db.execute('SELECT id,path,after_hash,created FROM revisions WHERE path=? ORDER BY created DESC LIMIT 30',(str(_resolve_workspace_path(path)),)).fetchall()
+        else:
+            rows=db.execute('SELECT id,path,after_hash,created FROM revisions ORDER BY created DESC LIMIT 30').fetchall()
+    current={}
+    for _,name,_,_ in rows:
+        if name not in current:
+            try: current[name]=digest(read_text(name)[0])
+            except (OSError,ValueError): current[name]=None
+    return [{'revision_id':row[0],'path':row[1],'expected_sha256':row[2],
+             'created':dt.datetime.fromtimestamp(row[3]).astimezone().isoformat(),
+             'can_restore':current[row[1]]==row[2]} for row in rows]
+
+
 def _xml(archive, name):
     item=archive.getinfo(name)
     if item.file_size>8*1024*1024: raise ValueError('Часть документа слишком велика для быстрого чтения.')
