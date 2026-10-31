@@ -28,7 +28,11 @@ foreach ($expectedCode in @(0, 17)) {
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $child = Start-InstallerProcess (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') "-NoProfile -EncodedCommand $encoded" "$prefix.out" "$prefix.err"
     try {
-        Start-Sleep -Seconds 2
+        $exitWait = [Diagnostics.Stopwatch]::StartNew()
+        while (-not $child.HasExited -and $exitWait.Elapsed.TotalSeconds -lt 15) {
+            Start-Sleep -Milliseconds 100
+            $child.Refresh()
+        }
         if (-not $child.HasExited) { throw 'Child did not exit in time' }
         $child.WaitForExit()
         $child.Refresh()
