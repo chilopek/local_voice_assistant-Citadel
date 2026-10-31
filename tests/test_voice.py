@@ -91,7 +91,7 @@ class CaptureTests(unittest.TestCase):
         self.assertLessEqual(sd.RawInputStream.call_args.kwargs["blocksize"], voice.VOICE_SAMPLE_RATE // 10)
 
     def test_capture_speech_and_silence_delivers_one_utterance(self):
-        sd = microphone([pcm(40)] * 6 + [pcm(1500)] * 6 + [pcm(40)] * 14)
+        sd = microphone([pcm(40)] * 6 + [pcm(1500)] * 6 + [pcm(40)] * 24)
         session = VoiceSession()
         with patch.dict(sys.modules, sounddevice=sd), patch.object(session, "transcribe_audio", return_value="команда") as stt:
             self.assertEqual(session.capture_utterance(threading.Event()), "команда")
@@ -164,7 +164,7 @@ class RecognitionTests(unittest.TestCase):
             self.assertEqual(session.transcribe_audio(pcm(1200)), "команда")
         self.assertEqual(factory.call_args.kwargs["compute_type"], "int8")
         call = factory.return_value.transcribe.call_args
-        self.assertEqual(call.kwargs["beam_size"], 1)
+        self.assertEqual(call.kwargs["beam_size"], voice.VOICE_BEAM_SIZE)
         self.assertIn("Цитадель", call.kwargs["initial_prompt"])
         self.assertEqual(str(call.args[0].dtype), "float32")
         self.assertAlmostEqual(float(call.args[0][0]), 1200 / 32768)
@@ -444,7 +444,7 @@ class MeterTests(unittest.TestCase):
             for _ in range(100):
                 session._report_level(pcm(1000), active=True)
         self.assertEqual(len(updates), 1)
-        sd = microphone([pcm(40)] * 6 + [pcm(1500)] * 6 + [pcm(40)] * 14)
+        sd = microphone([pcm(40)] * 6 + [pcm(1500)] * 6 + [pcm(40)] * 24)
         with patch.dict(sys.modules, sounddevice=sd):
             session._capture_raw(threading.Event())
         self.assertFalse(updates[-1]["active"])

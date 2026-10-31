@@ -104,6 +104,8 @@ class ResidentVoice:
                 heard = self.voice.capture_utterance(self.interrupt)
                 if self.interrupt.is_set():
                     continue
+                if heard:
+                    self.emit('heard', {'token': token, 'text': heard})
                 text, armed = self.gate.accept(heard or "")
                 if armed:
                     self.emit("armed", {"token": token})

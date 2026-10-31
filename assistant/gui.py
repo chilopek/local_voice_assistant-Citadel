@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import datetime as dt
 import queue
 import threading
 import uuid
@@ -17,6 +18,7 @@ from .session import SessionProcess
 from .speech import concise_speech
 from .paths import installed_uninstaller
 from .uninstall import begin_uninstall
+from .personal import PersonalScheduler, PersonalStore
 
 WAKE_WORD = "цитадель"
 HOTKEY = "Ctrl+Alt+C"
@@ -26,7 +28,7 @@ TEXT, MUTED, ACCENT = "#e8eaf0", "#929aaa", "#a9c7a5"
 
 
 class AssistantGUI:
-    def __init__(self, root: tk.Tk, *, enable_hotkey: bool = True, warm_voice: bool = True) -> None:
+    def __init__(self, root: tk.Tk, *, enable_hotkey: bool = True, warm_voice: bool = True, enable_scheduler: bool = True) -> None:
         self.root = root
         root.title(f"Citadel {__version__.removesuffix('.0')} — локальный помощник")
         width = min(1220, max(900, root.winfo_screenwidth() - 80))
@@ -50,6 +52,14 @@ class AssistantGUI:
         self._pending_listen = False
         self._awaiting_speech = False
         self._agent_running = False
+        self._pending_notices: list[dict] = []
+        self._notice_speech = False
+        self._pending_notice_audio: list[str] = []
+        self._notice_toast = None
+        self._personal_path = PROJECT_ROOT / 'data/personal.sqlite3'
+        self.scheduler = None
+        self._voice_setup = None
+        self.voice_setup_var = tk.StringVar(value='Выбор модели применяется после перезапуска приложения.')
         self._session_id: str | None = None
         self.hotkey_listener: Any | None = None
         self.mode = "wake"
@@ -74,6 +84,9 @@ class AssistantGUI:
         self.entry.focus_set()
         if warm_voice and VOICE_ENABLED:
             self._ensure_voice()
+        if enable_scheduler:
+            self.scheduler = PersonalScheduler(lambda item: self.events.put(('notice', item)), self._personal_path)
+            self.scheduler.start()
 
     def _initial_messages(self) -> list[dict[str, Any]]:
         return [{"role": "system", "content": SYSTEM_PROMPT + "\n" + self.memory.prompt_context()}]
@@ -170,6 +183,7 @@ class AssistantGUI:
         ttk.Label(header, text="Чем займёмся?", style="Title.TLabel").pack(side="left")
         self.stop_button = ttk.Button(header, text="■  Остановить", style="Stop.TButton", command=self._stop_task, state="disabled")
         self.stop_button.pack(side="right")
+        ttk.Button(header, text="Дела и память", command=self._show_personal).pack(side="right", padx=8)
         content = ttk.Frame(main)
         content.grid(row=1, column=0, sticky="nsew")
         content.columnconfigure(0, weight=1)
@@ -251,6 +265,9 @@ class AssistantGUI:
         # The UI thread owns busy. Reserve BEFORE spawning any worker.
         if self.busy or self.closed.is_set():
             return False
+        if self._notice_speech and self.voice_host:
+            self.voice_host.send({'command': 'cancel', 'token': self._voice_token})
+            self._notice_speech = self._awaiting_speech = False
         self.busy, self.listening = True, listening
         self._session_error = False
         self.cancel_event = threading.Event()
@@ -285,6 +302,15 @@ class AssistantGUI:
 
     def _stop_task(self) -> None:
         self._pending_listen = False
+        if self._notice_speech:
+            self._notice_speech = self._awaiting_speech = False
+            self._pending_notice_audio.clear()
+            self._voice_token = uuid.uuid4().hex
+            if self.voice_host:
+                self.voice_host.send({'command':'cancel','token':self._voice_token})
+            if not self.busy:
+                self.stop_button.configure(state='disabled')
+                self.status_var.set('Озвучка напоминания остановлена')
         if not self.busy:
             return
         self.cancel_event.set()
@@ -380,6 +406,8 @@ class AssistantGUI:
             return
         if event == "mic_level":
             self._set_mic_level(data)
+        elif event == 'heard':
+            self.voice_status_var.set('Распознано: ' + str(data.get('text',''))[:100])
         elif event == "user" and self.listening and not self._agent_running:
             text = str(data["text"])
             self._append_message("Вы", text)
@@ -392,6 +420,7 @@ class AssistantGUI:
             self.status_var.set("Озвучиваю краткий ответ…")
         elif event == "speech_done":
             self._awaiting_speech = False
+            self._notice_speech = False
             if not self.listening and not self._agent_running:
                 self._finish_session(self.cancel_event, keep_worker=True)
 
@@ -549,6 +578,16 @@ class AssistantGUI:
                 event, payload = self.events.get_nowait()
             except queue.Empty:
                 break
+            if event == 'notice':
+                self._pending_notices.append(payload)
+                continue
+            if event == 'voice_setup':
+                sid, kind, data = payload
+                if self._voice_setup and sid == self._voice_setup.id and kind in {'status','ready','error'}:
+                    data = data if isinstance(data,dict) else {'message':str(data)}
+                    self.voice_setup_var.set(data.get('message',''))
+                    self._log_activity('Подготовка распознавания',data.get('message',''))
+                continue
             if event == "voice_host":
                 self._voice_event(*payload)
                 continue
@@ -596,10 +635,156 @@ class AssistantGUI:
                 self._show_confirmation(payload)
             elif event == "session_done":
                 self._finish_session(payload)
+        self._deliver_notice()
         self._poll_id = self.root.after(60, self._drain_events)
+
+    def _deliver_notice(self) -> None:
+        if self._agent_running or self._awaiting_speech or self._pending_confirmation or (self.busy and not self.listening):
+            return
+        if not self.speak_var.get():
+            self._pending_notice_audio.clear()
+        if self._pending_notice_audio and self._voice_ready and self._voice_speech_ready and self.voice_host:
+            self._notice_speech = self._awaiting_speech = True
+            self.stop_button.configure(state='normal')
+            self.voice_host.send({'command':'speak','token':self._voice_token,'text':self._pending_notice_audio.pop(0)})
+            return
+        if not self._pending_notices:
+            return
+        item = self._pending_notices.pop(0)
+        try:
+            if not PersonalStore(self._personal_path).current_delivery(item):
+                return
+        except Exception as error:
+            self._log_activity('Ошибка напоминания', str(error))
+            return
+        text = item['message']
+        self._append_message('Напоминание', text)
+        self.messages.append({'role': 'assistant', 'content': f"Уведомление ID {item['id']}: {text}"})
+        self._log_activity('Фоновое уведомление', text)
+        # Never steal focus or open a modal dialog over the current application.
+        if self._notice_toast and self._notice_toast.winfo_exists():
+            self._notice_toast.destroy()
+        toast = self._notice_toast = tk.Toplevel(self.root)
+        toast.title('Цитадель · напоминание')
+        toast.configure(bg=PANEL, padx=18, pady=14)
+        toast.attributes('-topmost', True)
+        tk.Label(toast, text=text[:700], bg=PANEL, fg=TEXT, wraplength=360, justify='left').pack(fill='x')
+        row = ttk.Frame(toast)
+        row.pack(fill='x', pady=(12, 0))
+        if item['kind'] == 'reminder':
+            def later():
+                PersonalStore(self._personal_path).snooze(item['id'], 600)
+                toast.destroy()
+            ttk.Button(row, text='Через 10 минут', command=later).pack(side='left')
+        ttk.Button(row, text='Закрыть', command=toast.destroy).pack(side='right')
+        toast.update_idletasks()
+        toast.geometry(f'+{max(0, toast.winfo_screenwidth()-410)}+{max(0, toast.winfo_screenheight()-240)}')
+        toast.after(15000, toast.destroy)
+        PersonalStore(self._personal_path).acknowledge(item)
+        if self.speak_var.get() and self._voice_ready and self._voice_speech_ready and self.voice_host:
+            self._notice_speech = self._awaiting_speech = True
+            self.stop_button.configure(state='normal')
+            self.voice_host.send({'command': 'speak', 'token': self._voice_token, 'text': concise_speech(text)})
+        elif self.speak_var.get():
+            self._pending_notice_audio.append(concise_speech(text))
+
+    def _show_personal(self) -> None:
+        window = tk.Toplevel(self.root)
+        window.title('Цитадель · дела и память')
+        window.geometry('760x480')
+        notebook = ttk.Notebook(window)
+        notebook.pack(fill='both', expand=True, padx=16, pady=16)
+        reminders = ttk.Frame(notebook, padding=12)
+        memories = ttk.Frame(notebook, padding=12)
+        notebook.add(reminders, text='Напоминания и наблюдения')
+        notebook.add(memories, text='Постоянная память')
+        voice_settings = ttk.Frame(notebook,padding=16)
+        notebook.add(voice_settings,text='Голос')
+        ttk.Label(voice_settings,text='Распознавание речи',style='Title.TLabel').pack(anchor='w')
+        ttk.Label(voice_settings,text='Base — быстрее. Small — точнее, но требует больше памяти и времени.\nМодель скачивается только при нажатии кнопки подготовки.',wraplength=650).pack(anchor='w',pady=12)
+        selected = tk.StringVar(value='small')
+        ttk.Combobox(voice_settings,textvariable=selected,values=('base','small'),state='readonly').pack(anchor='w')
+        def prepare():
+            if self._voice_setup and not self._voice_setup.stopped.is_set() and (self._voice_setup.process is None or self._voice_setup.process.poll() is None):
+                self.voice_setup_var.set('Подготовка уже выполняется. Дождитесь завершения или отмените её.')
+                return
+            self._voice_setup = SessionProcess(lambda sid,event,data:self.events.put(('voice_setup',(sid,event,data))),module='assistant.voice_setup')
+            self.voice_setup_var.set('Начинаю подготовку модели…')
+            self._voice_setup.start({'model':selected.get()})
+        def cancel_preparation():
+            if self._voice_setup:
+                self._voice_setup.stop()
+                self._voice_setup = None
+                self.voice_setup_var.set('Подготовка остановлена. Если модель уже была проверена и сохранена, выбор применится после перезапуска.')
+        ttk.Button(voice_settings,text='Скачать и проверить выбранную модель',command=prepare).pack(anchor='w',pady=(12,4))
+        ttk.Button(voice_settings,text='Остановить подготовку',command=cancel_preparation).pack(anchor='w')
+        ttk.Label(voice_settings,textvariable=self.voice_setup_var,wraplength=650).pack(anchor='w',pady=12)
+        ttk.Label(voice_settings,text='По умолчанию: до 120 секунд, пауза до 1,2 секунды.\nДля особенно длинной диктовки можно увеличить voice_silence_seconds в настройках.',wraplength=650).pack(anchor='w')
+        store = PersonalStore(self._personal_path)
+        tree = ttk.Treeview(reminders, columns=('time','title'), show='headings', height=8)
+        tree.heading('time', text='Когда / тип')
+        tree.heading('title', text='Что напомнить')
+        tree.column('time', width=160, stretch=False)
+        tree.pack(fill='both', expand=True)
+        mem = ttk.Treeview(memories, columns=('key','value'), show='headings')
+        mem.heading('key', text='Ключ')
+        mem.heading('value', text='Предпочтение / заметка')
+        mem.pack(fill='both', expand=True)
+        def refresh():
+            tree.delete(*tree.get_children())
+            for item in store.list():
+                when = dt.datetime.fromtimestamp(item['due']).astimezone().strftime('%d.%m %H:%M') if item['kind']=='reminder' else 'Наблюдение: '+item['kind']
+                tree.insert('', 'end', iid=item['id'], values=(when, item['title']))
+            mem.delete(*mem.get_children())
+            for index, (key, value) in enumerate(self.memory.get_all().items()):
+                mem.insert('', 'end', iid=str(index), values=(key, value))
+        def cancel():
+            for key in tree.selection():
+                store.cancel(key)
+            refresh()
+        def snooze():
+            for key in tree.selection():
+                store.snooze(key, 600)
+            refresh()
+        actions = ttk.Frame(reminders)
+        actions.pack(fill='x', pady=8)
+        ttk.Button(actions, text='Отменить выбранное', command=cancel).pack(side='left')
+        ttk.Button(actions, text='Отложить на 10 минут', command=snooze).pack(side='left', padx=8)
+        ttk.Button(actions, text='Обновить', command=refresh).pack(side='right')
+        form = ttk.Frame(reminders)
+        form.pack(fill='x')
+        title = ttk.Entry(form)
+        title.pack(side='left', fill='x', expand=True)
+        delay = ttk.Spinbox(form, from_=1, to=1440, width=5)
+        delay.set('10')
+        delay.pack(side='left', padx=6)
+        ttk.Label(form, text='мин').pack(side='left')
+        def add():
+            import time
+            try:
+                minutes = float(delay.get())
+                if not 1 <= minutes <= 1440:
+                    raise ValueError('Укажите от 1 до 1440 минут')
+                store.add('reminder', title.get(), time.time()+minutes*60)
+                title.delete(0,'end')
+                refresh()
+            except ValueError as error:
+                messagebox.showerror('Напоминание', str(error), parent=window)
+        ttk.Button(form, text='Добавить', command=add).pack(side='left', padx=6)
+        ttk.Label(reminders, text='Работает пока Цитадель открыта. Пропущенные напоминания появятся после запуска.', wraplength=650).pack(anchor='w', pady=(8,0))
+        def forget():
+            for selection in mem.selection():
+                self.memory.delete(mem.item(selection, 'values')[0])
+            refresh()
+        ttk.Button(memories, text='Забыть выбранное', command=forget).pack(anchor='w', pady=8)
+        refresh()
 
     def close(self) -> None:
         self.closed.set()
+        if self._voice_setup:
+            self._voice_setup.stop()
+        if self.scheduler:
+            self.scheduler.stop()
         self.cancel_event.set()
         self._session_id = None
         if self.voice_host:

@@ -38,6 +38,9 @@ VOICE_SAMPLE_RATE = int(os.environ.get("ASSISTANT_VOICE_SAMPLE_RATE", str(LOCAL_
 VOICE_TTS_SAMPLE_RATE = int(os.environ.get("ASSISTANT_TTS_SAMPLE_RATE", str(LOCAL_CONFIG.get("tts_sample_rate", 48000))))
 VOICE_INPUT_DEVICE = os.environ.get("ASSISTANT_INPUT_DEVICE", LOCAL_CONFIG.get("input_device", ""))
 VOICE_THREADS = int(os.environ.get("ASSISTANT_VOICE_THREADS", str(LOCAL_CONFIG.get("voice_threads", 4))))
+VOICE_BEAM_SIZE = max(1, min(5, int(LOCAL_CONFIG.get("voice_beam_size", 3))))
+VOICE_MAX_SECONDS = max(30, min(300, float(LOCAL_CONFIG.get("voice_max_seconds", 120))))
+VOICE_SILENCE_SECONDS = max(0.7, min(3, float(LOCAL_CONFIG.get("voice_silence_seconds", 1.2))))
 
 
 def is_inside_workspace(path: Path) -> bool:

@@ -35,3 +35,7 @@ class Memory:
         return "Постоянная память пользователя:\n" + json.dumps(
             memories, ensure_ascii=False, indent=2
         )
+
+    def delete(self, key: str) -> bool:
+        with closing(sqlite3.connect(self.path)) as db, db:
+            return bool(db.execute("DELETE FROM memories WHERE key=?", (key,)).rowcount)

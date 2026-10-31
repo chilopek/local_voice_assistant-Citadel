@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
                 show_failure(details, log_path)
 
         root.report_callback_exception = report_callback_exception
-        app = AssistantGUI(root, enable_hotkey=not args.check, warm_voice=not args.check)
+        app = AssistantGUI(root, enable_hotkey=not args.check, warm_voice=not args.check, enable_scheduler=not args.check)
         icon_path = ASSET_ROOT / "citadel.ico"
         if icon_path.exists():
             root.iconbitmap(default=str(icon_path))

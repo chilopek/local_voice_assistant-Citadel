@@ -26,7 +26,11 @@ class WakeGate:
             return "", False
         if self.mode == "always":
             return text, False
-        match = re.search(r"\bцитадель\b", text, re.IGNORECASE)
+        match = re.match(r"^(?:(?:эй|слушай|привет|пожалуйста)\s*[,!]?\s+)?цитадель\b", text, re.I)
+        if not match:
+            # Limited ASR spellings only at the start of an address. Never fuzzy
+            # match arbitrary conversation ("цитата", "читатель", "цитадельная").
+            match = re.match(r"^(?:(?:эй|слушай|привет)\s*[,!]?\s+)?(?:ситадель|цитадел|цитадели|цита[ -]дель|сита[ -]дель)\b", text, re.I)
         if match:
             command = text[match.end():].lstrip(" ,.!?:;—-")
             self.armed_until = 0 if command else now + self.timeout

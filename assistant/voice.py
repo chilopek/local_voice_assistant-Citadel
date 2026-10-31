@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from .config import (
     VOICE_INPUT_DEVICE, VOICE_SAMPLE_RATE, VOICE_STT_MODEL, VOICE_TTS_MODEL,
     VOICE_TTS_SPEAKER, VOICE_TTS_SAMPLE_RATE, VOICE_THREADS, VOICE_TTS_ENGINE,
+    VOICE_BEAM_SIZE, VOICE_MAX_SECONDS, VOICE_SILENCE_SECONDS,
 )
 from .voice_assets import resolve_whisper_snapshot
 
@@ -321,8 +322,8 @@ class VoiceSession:
         return math.sqrt(sum(x * x for x in samples) / len(samples)) if samples else 0.0
 
     def _capture_raw(self, stop_event: threading.Event, *, wait_for_speech: bool = True,
-                     max_seconds: float = 18.0, start_timeout: float = 3.0,
-                     silence_seconds: float = 0.7) -> bytes:
+                     max_seconds: float = VOICE_MAX_SECONDS, start_timeout: float = 3.0,
+                     silence_seconds: float = VOICE_SILENCE_SECONDS) -> bytes:
         # Compatibility argument wait_for_speech: all capture now requires speech
         # and closes on silence; stopping discards the pending utterance.
         if stop_event.is_set():
@@ -359,6 +360,8 @@ class VoiceSession:
                 while not stop_event.is_set():
                     elapsed = time.monotonic() - started_at
                     if elapsed >= max_seconds or (not vad.started and elapsed >= start_timeout):
+                        if vad.started and elapsed >= max_seconds:
+                            raise VoiceError(f"Фраза длиннее {max_seconds:g} секунд. Команда не выполнена; разделите её на части.")
                         break
                     try:
                         chunk = chunks.get(timeout=0.05)
@@ -368,6 +371,8 @@ class VoiceSession:
                     if vad.feed(chunk):
                         break
                     if vad.elapsed >= max_seconds or (not vad.started and vad.elapsed >= start_timeout):
+                        if vad.started and vad.elapsed >= max_seconds:
+                            raise VoiceError(f"Фраза длиннее {max_seconds:g} секунд. Команда не выполнена; разделите её на части.")
                         break
         except Exception as error:
             raise _failure("Не удалось записать микрофон", error) from error
@@ -397,9 +402,12 @@ class VoiceSession:
             self._status("Распознавание речи...")
             if stop_event is not None and stop_event.is_set():
                 return None
-            segments, _ = model.transcribe(samples, language="ru", beam_size=1,
-                                           vad_filter=True, condition_on_previous_text=False,
-                                           initial_prompt="Имя помощника: Цитадель.")
+            segments, _ = model.transcribe(samples, language="ru", beam_size=VOICE_BEAM_SIZE,
+                                           temperature=0, vad_filter=True,
+                                           vad_parameters={"min_silence_duration_ms": 600, "speech_pad_ms": 400},
+                                           condition_on_previous_text=True,
+                                           initial_prompt="Цитадель. Открой браузер. Поставь таймер. Запомни заметку.",
+                                           hotwords="Цитадель")
             parts = []
             for segment in segments:
                 if stop_event is not None and stop_event.is_set():
@@ -413,7 +421,7 @@ class VoiceSession:
         """Compatibility alias for utterance capture, without keyboard gating."""
         return self.capture_utterance(stop_event, max_seconds)
 
-    def capture_utterance(self, stop_event: threading.Event, max_seconds: float = 18.0) -> str | None:
+    def capture_utterance(self, stop_event: threading.Event, max_seconds: float = VOICE_MAX_SECONDS) -> str | None:
         raw = self._capture_raw(stop_event, max_seconds=max_seconds)
         if stop_event.is_set() or not raw:
             return None
