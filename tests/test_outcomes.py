@@ -33,7 +33,7 @@ class OutcomeTests(unittest.TestCase):
         model=Mock()
         model.chat.return_value={'message':{'content':'```python\ndef decode(text):\n    return text[::-1]\n```'}}
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder)
+            root=Path(folder).resolve()
             with patch.object(app,'PROJECT_ROOT',root),patch.object(app,'WORKSPACE',root),patch('assistant.tools.WORKSPACE',root):
                 answer=app.run_turn(model,Memory(root/'memory.sqlite'),[],'Напиши дешифровщик и сохрани в файл decoder.py',confirm=Mock(side_effect=AssertionError('No permission for new file')))
             self.assertIn(str(root/'decoder.py'),answer)
