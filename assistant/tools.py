@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 from .config import WORKSPACE, is_inside_workspace  # compatibility for older app/test integrations
 from .paths import PYTHON_EXE
-from .application_catalog import Application, find_apps, resolve_application
+from .application_catalog import Application, catalog, find_apps, resolve_application
 from .permissions import (creation_requires_confirmation, download_requires_confirmation,
                           ordinary_document, protected_path)
 
@@ -177,10 +177,9 @@ def _resolve_launch(program: str) -> tuple[Application, str | None]:
                 continue
             if candidate.is_file() and candidate.resolve() == candidate.absolute():
                 return Application(program, str(candidate), "system"), kind
-    if not bare:
-        path = Path(program)
-        return Application(path.stem, program, "explicit", path.suffix.lower() in {".lnk", ".url"}), None
-    registered = resolve_application(program)
+    path = Path(program)
+    registered = resolve_application(program) if bare else next(
+        (item for item in catalog() if os.path.normcase(item.target) == os.path.normcase(str(path))), None)
     if registered:
         executable = Path(registered.executable).stem.casefold()
         command_hosts = {"cmd", "powershell", "pwsh", "wscript", "cscript", "mshta",
@@ -191,6 +190,8 @@ def _resolve_launch(program: str) -> tuple[Application, str | None]:
         requires_confirmation = executable in command_hosts or maintenance or registered.target.lower().endswith(".url")
         kind = None if requires_confirmation else "registered"
         return registered, kind
+    if not bare:
+        return Application(path.stem, program, "explicit", path.suffix.lower() in {".lnk", ".url"}), None
     raise FileNotFoundError(f"«{program}» не найдено среди приложений Windows и ярлыков. "
                             "Укажи точное имя, ярлык или полный путь. Установка не выполнялась.")
 
@@ -486,7 +487,7 @@ TOOL_SCHEMAS.extend([
     _schema("browser_snapshot", "Прочитать текущую страницу и получить свежие element_id для действий в браузере.", {}),
     _schema("browser_action", "Действовать в браузере по element_id из снимка. После действия возвращается новый снимок; проверяй результат.", {"action": {"type": "string", "enum": ["click", "fill", "press", "select", "back", "scroll", "tab", "screenshot"]}, "element_id": _str, "text": _str, "key": _str, "tab_index": _int}, ["action"]),
     _schema("desktop_snapshot", "Прочитать открытые окна Windows. Передай window_handle из списка, чтобы получить текст и control_id элементов нужного окна.", {"window_handle": _int}),
-    _schema("desktop_action", "Управлять окном Windows по handle и control_id из снимка. focus не требует подтверждения, другие действия требуют. keys использует синтаксис pywinauto: ^a, ^s, {ENTER}, %{F4}.", {"action": {"type": "string", "enum": ["focus", "click", "set_text", "keys", "close"]}, "window_handle": _int, "control_id": _str, "text": _str, "keys": _str}, ["action", "window_handle"]),
+    _schema("desktop_action", "Управлять наблюдаемым окном. invoke активирует кнопку, ссылку или элемент выбора через Windows UI Automation, например сохранённый аккаунт в текущем браузере. Выбери control_id из снимка и проверь новый снимок. Пароли и коды вводит пользователь.", {"action": {"type": "string", "enum": ["focus", "invoke", "click", "set_text", "keys", "close"]}, "window_handle": _int, "control_id": _str, "text": _str, "keys": _str}, ["action", "window_handle"]),
     _schema("take_screenshot", "Сохранить снимок экрана для пользователя. Для чтения интерфейса текстовой моделью используй desktop_snapshot.", {}),
     _schema("update_plan", "Показать пользователю короткий план сложной задачи; после этого выполняй шаги.", {"steps": {"type": "array", "items": _str}}, ["steps"]),
 ])

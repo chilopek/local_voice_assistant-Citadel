@@ -6,6 +6,8 @@ import tempfile
 
 from .paths import DATA_ROOT
 
+VOICE_PROFILES = {"xenia": "xenia", "jarvis": "eugene", "neutral": "aidar", "baya": "baya"}
+
 
 def save_updates(updates):
     path = DATA_ROOT/'assistant.local.json'
@@ -22,12 +24,12 @@ def save_updates(updates):
 
 
 def prepare_profile(profile,emit):
-    if profile not in {'jarvis','neutral'}:
-        raise ValueError('Профиль jarvis или neutral')
+    if profile not in VOICE_PROFILES:
+        raise ValueError('Выберите один из голосов Цитадели.')
     from .voice import VoiceSession
     from .voice_assets import _validate_audio
-    speaker = 'eugene' if profile=='jarvis' else 'aidar'
-    emit('status',{'message':'Подготовка мужского голоса Silero. Профиль «Джарвис» использует eugene, это не копия голоса актёра.'})
+    speaker = VOICE_PROFILES[profile]
+    emit('status',{'message':f'Подготовка голоса Silero · {speaker}.'})
     session = VoiceSession(tts_engine='silero',tts_speaker=speaker,allow_download=True,allow_sapi_fallback=False,
                            on_status=lambda message:emit('status',{'message':message}))
     model,torch = session._load_tts()
@@ -37,33 +39,25 @@ def prepare_profile(profile,emit):
     with torch.inference_mode():
         audio = model.apply_tts(text='Принято. Напоминание установлено.',speaker=speaker,sample_rate=rate,put_accent=True,put_yo=True)
     _validate_audio(audio,'Silero voice profile')
-    save_updates({'tts_engine':'silero','tts_speaker':speaker,'voice_profile':profile})
-    emit('ready',{'message':'Голос проверен и сохранён. Перезапустите Цитадель для применения.'})
+    save_updates({'tts_engine':'silero','tts_model':'v5_6_ru','tts_speaker':speaker,'voice_profile':profile})
+    emit('ready',{'message':f'Голос {speaker} проверен и сохранён.', 'reload_voice':True})
 
 
-def prepare_stt(model: str, emit) -> None:
+def prepare_stt(model: str, emit, language: str = "auto") -> None:
     if model not in {'base','small'}:
         raise ValueError('Выберите base или small')
+    if language not in {"auto", "ru", "en"}:
+        raise ValueError("Выберите авто, русский или английский.")
     from .voice import VoiceSession
     emit('status', {'message': f'Подготовка Whisper {model}. При отсутствии модели она будет скачана; это может занять несколько минут.'})
-    session = VoiceSession(stt_model=model,allow_download=True,on_status=lambda message: emit('status',{'message':message}))
+    session = VoiceSession(stt_model=model,stt_language=language,allow_download=True,
+                           on_status=lambda message: emit('status',{'message':message}))
     session.prepare(speech=False)
     session.warmup(speech=False)
     # Change the setting only after real local inference succeeds. Re-read the
     # file so other settings changed during a long download are preserved.
-    path = DATA_ROOT/'assistant.local.json'
-    config = json.loads(path.read_text(encoding='utf-8-sig')) if path.exists() else {}
-    config['stt_model'] = model
-    config.setdefault('voice_beam_size',3)
-    path.parent.mkdir(parents=True,exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,suffix='.json.part',delete=False) as output:
-        pending = Path(output.name)
-        json.dump(config,output,ensure_ascii=False,indent=2)
-    try:
-        pending.replace(path)
-    finally:
-        pending.unlink(missing_ok=True)
-    emit('ready',{'message':f'Whisper {model} готов. Выбор применится после перезапуска Цитадели.'})
+    save_updates({'stt_model':model, 'stt_language':language})
+    emit('ready',{'message':f'Whisper {model} готов.', 'reload_voice':True})
 
 
 def main() -> int:
@@ -80,7 +74,7 @@ def main() -> int:
         elif payload.get('profile'):
             prepare_profile(payload['profile'],emit)
         else:
-            prepare_stt(payload['model'],emit)
+            prepare_stt(payload['model'],emit,payload.get('language','auto'))
         return 0
     except Exception as error:
         emit('error',{'message':str(error)})

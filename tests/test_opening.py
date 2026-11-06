@@ -21,6 +21,9 @@ class OpeningTests(unittest.TestCase):
         fixture = patch("assistant.application_catalog.catalog", return_value=[])
         self.catalog = fixture.start()
         self.addCleanup(fixture.stop)
+        catalog = patch.object(tools, "catalog", self.catalog)
+        catalog.start()
+        self.addCleanup(catalog.stop)
 
     def test_default_browser_once_without_managed_browser(self):
         with patch.object(tools.sys, "platform", "win32"), patch.object(tools.os, "startfile", create=True) as start, \
@@ -135,6 +138,31 @@ class OpeningTests(unittest.TestCase):
             start.assert_not_called()
             tools.execute("launch_program", {"program": "Utility"}, confirmed=True)
             start.assert_called_once()
+
+    def test_registered_absolute_shortcut_does_not_need_confirmation(self):
+        from assistant.application_catalog import Application
+
+        shortcut = r"C:\Users\Gamer\Desktop\VALORANT.lnk"
+        self.catalog.return_value = [Application("VALORANT", shortcut, "shortcut", True,
+                                                 r"D:\Games\RiotClientServices.exe")]
+        with patch.object(tools.sys, "platform", "win32"), patch.object(tools.os, "startfile", create=True) as start:
+            arguments = {"program": shortcut}
+            self.assertFalse(tools.needs_confirmation("launch_program", arguments))
+            tools.execute("launch_program", arguments)
+        start.assert_called_once_with(shortcut, "open")
+
+    def test_system_load_is_measured_without_asking_model(self):
+        model = Mock()
+        status = {"cpu_percent": 17, "ram_percent": 30, "ram_available_bytes": 4 * 1024**3,
+                  "ram_total_bytes": 8 * 1024**3, "disk_active_percent": None, "disk_io": {},
+                  "disks": [], "nvidia_gpus": []}
+        with tempfile.TemporaryDirectory() as folder, patch.object(app, "PROJECT_ROOT", Path(folder)), \
+                patch.dict(tools.TOOL_FUNCTIONS, {"system_status": lambda: status}):
+            answer = app.run_turn(model, Memory(Path(folder) / "memory.sqlite"), [],
+                                  "Посмотри нагруженность системы", confirm=Mock(side_effect=AssertionError))
+        self.assertIn("17%", answer)
+        self.assertIn("30%", answer)
+        model.chat.assert_not_called()
 
     @unittest.skipUnless(sys.platform == "win32", "Windows process flags")
     def test_shell_launch_in_worker_breaks_away_from_cancelled_job(self):

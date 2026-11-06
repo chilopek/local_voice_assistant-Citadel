@@ -26,7 +26,7 @@ class WakeGate:
             return "", False
         if self.mode == "always":
             return text, False
-        match = re.match(r"^(?:(?:эй|слушай|привет|пожалуйста)\s*[,!]?\s+)?цитадель\b", text, re.I)
+        match = re.match(r"^(?:(?:эй|слушай|привет|пожалуйста|hey|hi)\s*[,!]?\s+)?(?:цитадель|citadel)\b", text, re.I)
         if not match:
             # Limited ASR spellings only at the start of an address. Never fuzzy
             # match arbitrary conversation ("цитата", "читатель", "цитадельная").

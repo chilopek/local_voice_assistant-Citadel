@@ -11,6 +11,39 @@ from contextlib import contextmanager
 import sys
 import subprocess
 import shutil
+import re
+
+
+def is_status_request(text: str) -> bool:
+    subject = r"(?:систем[аы]|компьютер[а]?|компа|пк|цп|процессор[а]?|cpu|озу|памят[ьи]|диск[аиов]*|gpu|видеокарт[аы]|всего)"
+    load = r"(?:нагрузк[ау]|загрузк[ау]|нагруженность|загруженность|занятость)"
+    return bool(re.fullmatch(
+        rf"\s*(?:(?:покажи|посмотри|проверь|скажи|замерь|измерь|какая|какова)\s+)?"
+        rf"(?:сейчас\s+)?(?:текущ(?:ая|ую)\s+)?(?:{load}(?:\s+на)?(?:\s+{subject}(?:\s+и\s+{subject}){{0,4}})?"
+        rf"|системные показатели|состояние системы|(?:show\s+)?(?:system|cpu|gpu|memory|disk)\s+(?:load|usage|status))"
+        r"(?:\s+(?:сейчас|компьютера|системы))?[.!?\s]*", text, re.I,
+    ))
+
+
+def describe_status(value: dict) -> str:
+    gib = 1024 ** 3
+    lines = [f"Процессор загружен на {value['cpu_percent']:g}%.",
+             f"ОЗУ занято на {value['ram_percent']:g}%. "
+             f"Свободно {value['ram_available_bytes'] / gib:.1f} из {value['ram_total_bytes'] / gib:.1f} ГиБ."]
+    active = value["disk_active_percent"]
+    if active is not None:
+        lines.append(f"Активность дисков — {active:g}%.")
+    elif value["disk_io"]:
+        io = value["disk_io"]
+        lines.append(f"Диски: чтение {io['read_bytes_per_second'] / 1024**2:.1f} МиБ/с, "
+                     f"запись {io['write_bytes_per_second'] / 1024**2:.1f} МиБ/с.")
+    for disk in value["disks"][:6]:
+        lines.append(f"{disk['mount']} Свободно {disk['free_bytes'] / gib:.1f} ГиБ.")
+    for gpu in value["nvidia_gpus"]:
+        lines.append(f"{gpu['name']} загружена на {gpu['gpu_percent']:g}%.")
+    if not value["nvidia_gpus"]:
+        lines.append("Показатель загрузки видеокарты недоступен.")
+    return "\n".join(lines)
 
 
 def known_folders() -> dict:

@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 from .config import (
     VOICE_INPUT_DEVICE, VOICE_SAMPLE_RATE, VOICE_STT_MODEL, VOICE_TTS_MODEL,
-    VOICE_TTS_SPEAKER, VOICE_TTS_SAMPLE_RATE, VOICE_THREADS, VOICE_TTS_ENGINE,
+    VOICE_TTS_SPEAKER, VOICE_TTS_SAMPLE_RATE, VOICE_THREADS, VOICE_TTS_ENGINE, VOICE_STT_LANGUAGE,
     VOICE_BEAM_SIZE, VOICE_MAX_SECONDS, VOICE_SILENCE_SECONDS,
 )
 from .voice_assets import resolve_whisper_snapshot
@@ -119,8 +119,9 @@ class VoiceSession:
     """
 
     def __init__(self, on_status: Callable[[str], None] | None = None, *,
-                 allow_sapi_fallback: bool = True, allow_download: bool = False,
+                 allow_sapi_fallback: bool = False, allow_download: bool = False,
                  stt_model: str | None = None, tts_model: str | None = None,
+                 stt_language: str | None = None,
                  tts_speaker: str | None = None,
                  tts_engine: str | None = None,
                  on_level: Callable[[dict[str, Any]], None] | None = None) -> None:
@@ -132,6 +133,7 @@ class VoiceSession:
         self._allow_sapi_fallback = allow_sapi_fallback
         self.allow_download = allow_download
         self.stt_model = stt_model if stt_model is not None else VOICE_STT_MODEL
+        self.stt_language = stt_language if stt_language is not None else VOICE_STT_LANGUAGE
         self.tts_model = tts_model if tts_model is not None else VOICE_TTS_MODEL
         self.tts_speaker = tts_speaker if tts_speaker is not None else VOICE_TTS_SPEAKER
         self.tts_engine = tts_engine if tts_engine is not None else VOICE_TTS_ENGINE
@@ -402,12 +404,13 @@ class VoiceSession:
             self._status("Распознавание речи...")
             if stop_event is not None and stop_event.is_set():
                 return None
-            segments, _ = model.transcribe(samples, language="ru", beam_size=VOICE_BEAM_SIZE,
+            language = self.stt_language if self.stt_language in {"ru", "en"} else None
+            segments, _ = model.transcribe(samples, language=language, beam_size=VOICE_BEAM_SIZE,
                                            temperature=0, vad_filter=True,
                                            vad_parameters={"min_silence_duration_ms": 600, "speech_pad_ms": 400},
-                                           condition_on_previous_text=True,
-                                           initial_prompt="Цитадель. Открой браузер. Поставь таймер. Запомни заметку.",
-                                           hotwords="Цитадель")
+                                           multilingual=language is None,
+                                           condition_on_previous_text=language is not None,
+                                           hotwords="Цитадель, Citadel, Valorant, Discord, Steam, YouTube")
             parts = []
             for segment in segments:
                 if stop_event is not None and stop_event.is_set():
@@ -459,9 +462,10 @@ class VoiceSession:
     def _tts_settings(self, model: Any) -> tuple[str, int]:
         speakers = getattr(model, "speakers", None)
         speaker = self.tts_speaker or "aidar"
-        if speakers and speaker not in speakers:
-            speaker = "aidar" if "aidar" in speakers else next(iter(speakers))
-            self._status(f"Голос модели недоступен, выбран {speaker}")
+        if self.tts_engine == "piper":
+            speaker = "irina"
+        if isinstance(speakers, (list, tuple, set, dict)) and speakers and speaker not in speakers:
+            raise VoiceError(f"Голос «{speaker}» недоступен в выбранной модели. Выбери другой голос в настройках.")
         rates = getattr(model, "sample_rates", None)
         if rates is None:
             rates = getattr(model, "sample_rate", (8000, 24000, 48000))

@@ -66,6 +66,7 @@ class AssistantGUI:
         self._personal_path = PROJECT_ROOT / 'data/personal.sqlite3'
         self.scheduler = None
         self._voice_setup = None
+        self._voice_reload_pending = False
         self.voice_setup_var = tk.StringVar(value='Выбор модели применяется после перезапуска приложения.')
         self._session_id: str | None = None
         self.hotkey_listener: Any | None = None
@@ -402,7 +403,7 @@ class AssistantGUI:
         if event == "ready":
             self._voice_ready = True
             self._voice_speech_ready = self._voice_speech_ready or bool(data.get("speech"))
-            self.voice_status_var.set("Голос готов · модели в памяти")
+            self.voice_status_var.set("Голос готов · " + (data.get("voice") or "модели в памяти"))
             if self._pending_listen:
                 self._pending_listen = False
                 self._start_listening()
@@ -647,6 +648,8 @@ class AssistantGUI:
                     data = data if isinstance(data,dict) else {'message':str(data)}
                     self.voice_setup_var.set(data.get('message',''))
                     self._log_activity('Подготовка распознавания',data.get('message',''))
+                    if kind == 'ready' and data.get('reload_voice'):
+                        self._voice_reload_pending = True
                 continue
             if event == "voice_host":
                 self._voice_event(*payload)
@@ -697,6 +700,18 @@ class AssistantGUI:
                 self._show_confirmation(payload)
             elif event == "session_done":
                 self._finish_session(payload)
+        if self._voice_reload_pending and not self._awaiting_speech and not self._agent_running and not self._pending_confirmation:
+            self._voice_reload_pending = False
+            resume_mic = self.listening or self._pending_listen
+            if self.listening:
+                self._finish_session(self.cancel_event, keep_worker=True)
+            if self.voice_host:
+                self.voice_host.stop()
+                self.voice_host = None
+            self._voice_ready = self._voice_speech_ready = False
+            self._pending_listen = resume_mic
+            if resume_mic or self.speak_var.get():
+                self._ensure_voice()
         self._deliver_notice()
         self._poll_id = self.root.after(60, self._drain_events)
 
@@ -848,15 +863,28 @@ class AssistantGUI:
         notebook.add(voice_settings,text='Голос')
         ttk.Label(voice_settings,text='Распознавание речи',style='Title.TLabel').pack(anchor='w')
         ttk.Label(voice_settings,text='Base — быстрее. Small — точнее, но требует больше памяти и времени.\nМодель скачивается только при нажатии кнопки подготовки.',wraplength=650).pack(anchor='w',pady=12)
-        selected = tk.StringVar(value='small')
-        ttk.Combobox(voice_settings,textvariable=selected,values=('base','small'),state='readonly').pack(anchor='w')
+        from .config import LOCAL_CONFIG_PATH, VOICE_STT_LANGUAGE, VOICE_STT_MODEL, VOICE_TTS_SPEAKER
+        try:
+            settings = json.loads(LOCAL_CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            settings = {}
+        saved_language = settings.get("stt_language", VOICE_STT_LANGUAGE)
+        saved_model = settings.get("stt_model", VOICE_STT_MODEL)
+        saved_speaker = settings.get("tts_speaker", VOICE_TTS_SPEAKER) if settings.get("voice_profile") else VOICE_TTS_SPEAKER
+        languages = {"Авто (RU/EN)": "auto", "Русский": "ru", "English": "en"}
+        language = tk.StringVar(value=next((label for label, code in languages.items() if code == saved_language), "Авто (RU/EN)"))
+        selected = tk.StringVar(value=saved_model if saved_model in {"base", "small"} else "small")
+        recognition = ttk.Frame(voice_settings)
+        recognition.pack(anchor='w')
+        ttk.Combobox(recognition,textvariable=selected,values=('base','small'),state='readonly',width=8).pack(side='left')
+        ttk.Combobox(recognition,textvariable=language,values=tuple(languages),state='readonly',width=16).pack(side='left',padx=8)
         def prepare():
             if self._voice_setup and not self._voice_setup.stopped.is_set() and (self._voice_setup.process is None or self._voice_setup.process.poll() is None):
                 self.voice_setup_var.set('Подготовка уже выполняется. Дождитесь завершения или отмените её.')
                 return
             self._voice_setup = SessionProcess(lambda sid,event,data:self.events.put(('voice_setup',(sid,event,data))),module='assistant.voice_setup')
             self.voice_setup_var.set('Начинаю подготовку модели…')
-            self._voice_setup.start({'model':selected.get()})
+            self._voice_setup.start({'model':selected.get(), 'language':languages[language.get()]})
         def cancel_preparation():
             if self._voice_setup:
                 self._voice_setup.stop()
@@ -866,15 +894,16 @@ class AssistantGUI:
         ttk.Button(voice_settings,text='Остановить подготовку',command=cancel_preparation).pack(anchor='w')
         ttk.Label(voice_settings,textvariable=self.voice_setup_var,wraplength=650).pack(anchor='w',pady=12)
         ttk.Label(voice_settings,text='По умолчанию: до 120 секунд, пауза до 1,2 секунды.\nДля особенно длинной диктовки можно увеличить voice_silence_seconds в настройках.',wraplength=650).pack(anchor='w')
-        ttk.Label(voice_settings,text='Голос: «Джарвис» — более низкий eugene; обычный — aidar.\nЭто локальные голоса Silero, без клонирования актёра.',wraplength=650).pack(anchor='w',pady=(12,4))
-        profile = tk.StringVar(value='jarvis')
-        ttk.Combobox(voice_settings,textvariable=profile,values=('jarvis','neutral'),state='readonly').pack(anchor='w')
+        ttk.Label(voice_settings,text='Голос ответов',wraplength=650).pack(anchor='w',pady=(12,4))
+        profiles = {"Ксения": "xenia", "Евгений": "jarvis", "Айдар": "neutral", "Бая": "baya"}
+        profile = tk.StringVar(value={"xenia":"Ксения", "eugene":"Евгений", "aidar":"Айдар", "baya":"Бая"}.get(saved_speaker,"Ксения"))
+        ttk.Combobox(voice_settings,textvariable=profile,values=tuple(profiles),state='readonly').pack(anchor='w')
         def prepare_voice():
             if self._voice_setup and not self._voice_setup.stopped.is_set() and (self._voice_setup.process is None or self._voice_setup.process.poll() is None):
                 self.voice_setup_var.set('Дождитесь текущей подготовки или остановите её.')
                 return
             self._voice_setup = SessionProcess(lambda sid,event,data:self.events.put(('voice_setup',(sid,event,data))),module='assistant.voice_setup')
-            self._voice_setup.start({'profile':profile.get()})
+            self._voice_setup.start({'profile':profiles[profile.get()]})
         ttk.Button(voice_settings,text='Подготовить выбранный голос',command=prepare_voice).pack(anchor='w',pady=6)
         model_settings = ttk.Frame(notebook,padding=16)
         notebook.add(model_settings,text='Модель агента')

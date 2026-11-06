@@ -165,7 +165,9 @@ class RecognitionTests(unittest.TestCase):
         self.assertEqual(factory.call_args.kwargs["compute_type"], "int8")
         call = factory.return_value.transcribe.call_args
         self.assertEqual(call.kwargs["beam_size"], voice.VOICE_BEAM_SIZE)
-        self.assertIn("Цитадель", call.kwargs["initial_prompt"])
+        self.assertIsNone(call.kwargs["language"])
+        self.assertTrue(call.kwargs["multilingual"])
+        self.assertIn("Цитадель", call.kwargs["hotwords"])
         self.assertEqual(str(call.args[0].dtype), "float32")
         self.assertAlmostEqual(float(call.args[0][0]), 1200 / 32768)
         self.assertTrue(any("локальных файлов" in status for status in statuses))
@@ -217,7 +219,7 @@ class SpeechTests(unittest.TestCase):
         self.assertEqual("".join(chunks).replace(" ", ""), VoiceSession._speech_text(text).replace(" ", ""))
 
     def backend(self):
-        model = Mock(speakers=["aidar", "baya"], sample_rates=[8000, 24000, 48000])
+        model = Mock(speakers=["aidar", "baya", "xenia"], sample_rates=[8000, 24000, 48000])
         model.apply_tts.return_value = [0.0, 0.1]
         torch = SimpleNamespace(inference_mode=nullcontext)
         sd = Mock()
@@ -264,11 +266,12 @@ class SpeechTests(unittest.TestCase):
         self.assertGreaterEqual(sd.stop.call_count, 1)
         self.assertEqual(model.apply_tts.call_count, 1)
 
-    def test_speaker_and_rate_fallbacks_use_actual_model_metadata(self):
-        session = VoiceSession()
-        with patch.object(voice, "VOICE_TTS_SPEAKER", "missing"), patch.object(voice, "VOICE_TTS_SAMPLE_RATE", 44100):
-            self.assertEqual(session._tts_settings(SimpleNamespace(speakers=["baya", "aidar"], sample_rates=[24000, 48000])), ("aidar", 48000))
-            self.assertEqual(session._tts_settings(SimpleNamespace(speakers=["baya"], sample_rate=24000)), ("baya", 24000))
+    def test_missing_speaker_reports_error_instead_of_changing_voice(self):
+        session = VoiceSession(tts_speaker="xenia", tts_engine="silero")
+        with patch.object(voice, "VOICE_TTS_SAMPLE_RATE", 44100):
+            self.assertEqual(session._tts_settings(SimpleNamespace(speakers=["xenia", "aidar"], sample_rates=[24000, 48000])), ("xenia", 48000))
+            with self.assertRaisesRegex(voice.VoiceError, "xenia"):
+                session._tts_settings(SimpleNamespace(speakers=["baya"], sample_rate=24000))
 
     def test_silero_cache_is_explicit_and_cpu_loading_avoids_wrapper(self):
         model = Mock()
@@ -290,11 +293,11 @@ class SpeechTests(unittest.TestCase):
             self.assertTrue(statuses)
 
     def test_sapi_fallback_is_optional_and_reports_machine_voice(self):
-        session = VoiceSession()
+        session = VoiceSession(allow_sapi_fallback=True)
         with patch.object(session, "_load_tts", side_effect=VoiceError("Silero failed")), patch.object(session, "_speak_sapi") as sapi, patch.object(voice.os, "name", "nt"), self.assertLogs(voice.logger, level="ERROR"):
             session.speak("Текст.")
             sapi.assert_called_once()
-        session = VoiceSession(allow_sapi_fallback=False)
+        session = VoiceSession()
         with patch.object(session, "_load_tts", side_effect=VoiceError("Silero failed")), self.assertLogs(voice.logger, level="ERROR"):
             with self.assertRaisesRegex(VoiceError, "Silero failed"):
                 session.speak("Текст.")

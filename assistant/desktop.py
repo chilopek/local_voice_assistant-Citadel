@@ -73,18 +73,27 @@ def _observed_control(window, window_handle: int, control_id: str):
 
 
 def desktop_action(action: str, window_handle: int, control_id: str = "", text: str = "", keys: str = "") -> dict:
-    desktop = _desktop()
-    window = desktop.window(handle=int(window_handle)).wrapper_object()
-    control = window
-    if control_id:
-        recorded = _targets.get(control_id)
-        if not recorded or recorded[0] != int(window_handle):
-            raise ValueError("Устаревший control_id. Сначала прочитай desktop_snapshot.")
-        control = next((item for item in [window, *window.descendants()[:250]] if tuple(item.element_info.runtime_id) == recorded[1]), None)
-        if control is None:
-            raise ValueError("Элемент больше не существует. Обнови снимок окна.")
+    _, window = _observed_window(window_handle)
+    if action in {"invoke", "click", "set_text"} and not control_id:
+        raise ValueError("Выбери control_id элемента из desktop_snapshot.")
+    control = _observed_control(window, window_handle, control_id) if control_id else window
+    if control_id and control.element_info.element.CurrentIsPassword:
+        raise PermissionError("Пароль вводит пользователь.")
     if action == "focus":
         window.set_focus()
+    elif action == "invoke":
+        from pywinauto.uia_defines import NoPatternInterfaceError
+        if not control.is_visible() or not control.is_enabled():
+            raise ValueError("Элемент недоступен. Обнови снимок окна.")
+        try:
+            invoke = control.iface_invoke
+        except NoPatternInterfaceError:
+            try:
+                control.iface_selection_item.Select()
+            except NoPatternInterfaceError as error:
+                raise ValueError("Элемент не поддерживает активацию через Windows UI Automation.") from error
+        else:
+            invoke.Invoke()
     elif action == "click":
         control.click_input()
     elif action == "set_text":
@@ -96,7 +105,7 @@ def desktop_action(action: str, window_handle: int, control_id: str = "", text: 
         window.close()
         return {"closed": True, "window_handle": window_handle}
     else:
-        raise ValueError("Доступны focus, click, set_text, keys, close.")
+        raise ValueError("Доступны focus, invoke, click, set_text, keys, close.")
     return desktop_snapshot(window_handle)
 
 
