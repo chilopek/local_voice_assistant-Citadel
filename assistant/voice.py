@@ -440,7 +440,12 @@ class VoiceSession:
         text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
         text = re.sub(r"https?://\S+|www\.\S+", " ", text)
         text = re.sub(r"<[^>]*>", " ", text)
-        text = re.sub(r"(?m)^\s*(?:[-+*>#]+|\d+[.)])\s*", "", text)
+        from .speech import spoken_time
+        text = re.sub(r"(?<![\d:])([01]?\d|2[0-3]):([0-5]\d)(?![\d:])",
+                      lambda m: spoken_time(int(m[1]), int(m[2])), text)
+        text = re.sub(r"\b(в|на)\s+([01]?\d|2[0-3])\.([0-5]\d)(?!\d|\.\d)",
+                      lambda m: m[1] + " " + spoken_time(int(m[2]), int(m[3])), text, flags=re.I)
+        text = re.sub(r"(?m)^\s*(?:[-+*>#]+\s*|\d+[.)]\s+)", "", text)
         text = re.sub(r"[`*_#~|]", "", text)
         return re.sub(r"\s+", " ", text).strip()
 

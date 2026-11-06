@@ -23,6 +23,40 @@ class ResidentVoice:
         self.waiting = False
         self.gate = WakeGate("wake")
         self.serial = 0
+        self.headset = False
+
+    def speak(self, text: str) -> tuple[str, bool]:
+        if not self.headset or not self.listening:
+            self.voice.speak(text, cancel_event=self.interrupt)
+            return "", False
+
+        finished = threading.Event()
+        spoken_command = []
+        wake = WakeGate("wake")
+
+        class PlaybackStop:
+            def is_set(inner_self):
+                return self.interrupt.is_set() or bool(spoken_command)
+
+        def listen_during_reply():
+            try:
+                while not finished.is_set() and not self.interrupt.is_set():
+                    heard = self.voice.capture_utterance(self.interrupt, max_seconds=20)
+                    command, armed = wake.accept(heard or "")
+                    if command or armed:
+                        spoken_command.append((command, armed))
+                        return
+            except Exception as error:
+                self.emit("status", {"message": f"Микрофон во время ответа недоступен: {error}"})
+
+        listener = threading.Thread(target=listen_during_reply, daemon=True)
+        listener.start()
+        try:
+            self.voice.speak(text, cancel_event=PlaybackStop())
+        finally:
+            finished.set()
+            listener.join()
+        return spoken_command[0] if spoken_command and not self.interrupt.is_set() else ("", False)
 
     def submit(self, command: dict) -> None:
         kind = command.get("command")
@@ -71,6 +105,9 @@ class ResidentVoice:
                     self.emit("state", {"stt_instance": id(getattr(self.voice, "_stt", None)),
                                         "tts_instance": id(getattr(self.voice, "_tts", None))})
                     continue
+                if kind == "headset":
+                    self.headset = bool(command.get("enabled"))
+                    continue
                 if kind == "warm":
                     self.interrupt.clear()
                     try:
@@ -90,6 +127,7 @@ class ResidentVoice:
                     self.token = token
                     self.interrupt.clear()
                     if kind == "speak":
+                        next_text, armed = "", False
                         self.emit("speaking", {"token": token})
                         try:
                             if command.get('chime'):
@@ -98,11 +136,18 @@ class ResidentVoice:
                                 self.interrupt.wait(.35)
                             if self.interrupt.is_set():
                                 continue
-                            self.voice.speak(command["text"], cancel_event=self.interrupt)
+                            next_text, armed = self.speak(command["text"])
                         except Exception as error:
                             self.emit("error", {"message": str(error), "token": token, "phase": "speech"})
                         if not self.interrupt.is_set():
                             self.emit("speech_done", {"token": token})
+                            if armed:
+                                self.gate.armed_until = time.monotonic() + self.gate.timeout
+                                self.emit("armed", {"token": token})
+                            if next_text:
+                                self.waiting = True
+                                self.emit("user", {"token": token, "text": next_text})
+                                continue
                     self.waiting = False
             if not self.listening or self.waiting or self.interrupt.is_set():
                 continue
@@ -151,6 +196,7 @@ def main() -> int:
             emit("mic_level", {**value, "token": service.token if service else ""})
         voice = VoiceSession(on_status=lambda text: emit("status", {"message": text}), on_level=level)
         service = ResidentVoice(voice, emit)
+        service.headset = bool(payload.get("headset"))
         # Initialize native numerical libraries before a thread blocks in the
         # Windows CRT stdin reader. This also establishes readiness before jobs.
         try:

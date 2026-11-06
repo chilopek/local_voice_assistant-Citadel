@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import re
 import sys
+import time
 import uuid
 
 from .config import PROJECT_ROOT
@@ -72,7 +75,116 @@ def _observed_control(window, window_handle: int, control_id: str):
     return control
 
 
+def foreground_window() -> tuple[int, int] | None:
+    if sys.platform != "win32":
+        return None
+    import win32gui
+    import win32process
+    handle = win32gui.GetForegroundWindow()
+    if handle:
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(handle)
+            return handle, pid
+        except Exception:
+            return None
+    return None
+
+
+def _close_observed(window_handle: int, title: str, pid: int) -> dict:
+    import win32con
+    import win32gui
+    import win32process
+
+    def still_open() -> bool:
+        if not win32gui.IsWindow(window_handle):
+            return False
+        try:
+            return win32process.GetWindowThreadProcessId(window_handle)[1] == pid
+        except Exception:
+            return False
+
+    if still_open():
+        win32gui.PostMessage(window_handle, win32con.WM_CLOSE, 0, 0)
+    deadline = time.monotonic() + 1.5
+    while still_open() and time.monotonic() < deadline:
+        time.sleep(.05)
+    closed = not still_open()
+    return {"closed": closed, "window_handle": window_handle, "title": title,
+            "message": f"Окно «{title}» закрыто." if closed else
+            f"Окно «{title}» пока открыто. Проверь, не ждёт ли приложение сохранения или подтверждения."}
+
+
+def close_window(title: str = "", previous_window: tuple[int, int] | None = None) -> dict:
+    if sys.platform != "win32":
+        raise RuntimeError("Управление окнами доступно в Windows.")
+    import psutil
+    from .application_catalog import name_key
+    import win32gui
+
+    ignored_pids = {os.getpid(), os.getppid()}
+    import pywintypes
+    windows = []
+    for item in desktop_snapshot()["windows"]:
+        try:
+            if item["pid"] not in ignored_pids and win32gui.GetClassName(item["handle"]) not in {
+                "Progman", "WorkerW", "Shell_TrayWnd",
+            }:
+                windows.append(item)
+        except pywintypes.error:
+            continue
+    if title:
+        key = name_key(title)
+        if not key:
+            raise ValueError("Укажи название окна.")
+        matches = [item for item in windows if key in name_key(item["title"])]
+        if not matches:
+            for item in windows:
+                try:
+                    if key == name_key(psutil.Process(item["pid"]).name()):
+                        matches.append(item)
+                except psutil.Error:
+                    continue
+    else:
+        current = foreground_window()
+        preferred = current if current and current[1] not in ignored_pids else previous_window
+        matches = [item for item in windows if (item["handle"], item["pid"]) == tuple(preferred or ())]
+        if not matches and len(windows) == 1:
+            matches = windows
+    if len(matches) == 1:
+        item = matches[0]
+        _, window = _observed_window(item["handle"])
+        return _close_observed(item["handle"], item["title"], window.process_id())
+    candidates = matches or windows
+    options = ", ".join(f"«{item['title']}»" for item in candidates[:5])
+    message = f"Какое окно закрыть? Открыты {options}." if options else "Подходящего открытого окна не нашла."
+    return {"closed": False, "needs_input": bool(options), "message": message}
+
+
+def requires_confirmation(action: str, window_handle: int = 0, control_id: str = "") -> bool:
+    if action in {"focus", "close"}:
+        return False
+    if action not in {"invoke", "click", "set_text"} or not window_handle or not control_id:
+        return True
+    _, window = _observed_window(window_handle)
+    control = _observed_control(window, window_handle, control_id)
+    info = control.element_info
+    if info.element.CurrentIsPassword:
+        raise PermissionError("Пароль вводит пользователь.")
+    label = control.window_text()
+    if re.search(r"купить|оплат|покупк|удал|стереть|выключ|перезагр|отправ|перевести|buy|pay|purchase|delete|remove|shutdown|restart|send|transfer", label, re.I):
+        return True
+    if action == "set_text":
+        return info.control_type != "Edit"
+    return info.control_type not in {"TabItem", "ListItem", "TreeItem"} and not re.fullmatch(
+        r"открыть меню|настройки|аккаунты|сменить аккаунт|выбрать аккаунт|settings|accounts|switch account|choose an account",
+        label.strip(), re.I,
+    )
+
+
 def desktop_action(action: str, window_handle: int, control_id: str = "", text: str = "", keys: str = "") -> dict:
+    from .tools import _confirmed_execution
+    if not _confirmed_execution.get() and requires_confirmation(action, window_handle, control_id):
+        raise PermissionError("Это действие в окне требует подтверждения.")
     _, window = _observed_window(window_handle)
     if action in {"invoke", "click", "set_text"} and not control_id:
         raise ValueError("Выбери control_id элемента из desktop_snapshot.")
@@ -102,8 +214,7 @@ def desktop_action(action: str, window_handle: int, control_id: str = "", text: 
         window.set_focus()
         control.type_keys(keys, with_spaces=True, pause=0.03)
     elif action == "close":
-        window.close()
-        return {"closed": True, "window_handle": window_handle}
+        return _close_observed(window_handle, window.window_text(), window.process_id())
     else:
         raise ValueError("Доступны focus, invoke, click, set_text, keys, close.")
     return desktop_snapshot(window_handle)

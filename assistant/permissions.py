@@ -61,10 +61,16 @@ def ordinary_document(path: Path) -> bool:
             (path.is_dir() or path.suffix.casefold() in DOCUMENT_SUFFIXES))
 
 
-def creation_requires_confirmation(path: Path) -> bool:
-    return protected_path(path) or path.exists() or path.is_symlink()
+def project_write_allowed(path: Path, workspace: Path) -> bool:
+    return path.resolve().is_relative_to(workspace.resolve()) and not protected_path(path)
 
 
-def download_requires_confirmation(path: Path) -> bool:
+def creation_requires_confirmation(path: Path, workspace: Path | None = None) -> bool:
+    return protected_path(path) or path.is_symlink() or (
+        path.exists() and not project_write_allowed(path, workspace or WORKSPACE)
+    )
+
+
+def download_requires_confirmation(path: Path, workspace: Path | None = None) -> bool:
     # Storage is not execution: opening an executable is assessed separately.
-    return creation_requires_confirmation(path)
+    return creation_requires_confirmation(path, workspace)

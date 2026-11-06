@@ -46,6 +46,53 @@ def describe_status(value: dict) -> str:
     return "\n".join(lines)
 
 
+def power_request(text: str) -> str | None:
+    if re.fullmatch(r"\s*(?:пожалуйста\s*,?\s*)?(?:выключи|выключить)\s+(?:комп(?:ьютер)?|пк)[.!\s]*", text, re.I):
+        return "shutdown"
+    if re.fullmatch(r"\s*(?:пожалуйста\s*,?\s*)?(?:переведи|отправь|отправить)\s+(?:(?:комп(?:ьютер)?|пк|его)\s+)?в\s+(?:сон|спящий режим)[.!\s]*", text, re.I):
+        return "sleep"
+    return None
+
+
+def power_action(action: str) -> dict:
+    from .tools import _confirmed_execution
+    if action not in {"shutdown", "sleep"}:
+        raise ValueError("Доступны выключение и спящий режим.")
+    if not _confirmed_execution.get():
+        raise PermissionError("Действие с питанием требует подтверждения.")
+    if sys.platform != "win32":
+        raise RuntimeError("Управление питанием доступно в Windows.")
+    if action == "shutdown":
+        executable = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "shutdown.exe"
+        subprocess.run([str(executable), "/s", "/t", "0"], check=True, timeout=10, capture_output=True,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+        return {"message": "Windows приняла команду выключения."}
+
+    import ctypes
+    import win32api
+    import win32con
+    import win32security
+
+    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(),
+                                           win32con.TOKEN_ADJUST_PRIVILEGES | win32con.TOKEN_QUERY)
+    try:
+        privilege = win32security.LookupPrivilegeValue(None, win32security.SE_SHUTDOWN_NAME)
+        previous = win32security.AdjustTokenPrivileges(token, False, [(privilege, win32con.SE_PRIVILEGE_ENABLED)])
+        if win32api.GetLastError() == 1300:  # ERROR_NOT_ALL_ASSIGNED
+            raise PermissionError("Windows не дала текущему пользователю право на спящий режим.")
+        try:
+            suspend = ctypes.WinDLL("powrprof", use_last_error=True).SetSuspendState
+            suspend.argtypes = [ctypes.c_ubyte] * 3
+            suspend.restype = ctypes.c_ubyte
+            if not suspend(0, 0, 0):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            win32security.AdjustTokenPrivileges(token, False, previous)
+    finally:
+        token.Close()
+    return {"message": "Компьютер вернулся из спящего режима."}
+
+
 def known_folders() -> dict:
     home=Path.home()
     folders={'desktop':home/'Desktop','documents':home/'Documents','downloads':home/'Downloads'}

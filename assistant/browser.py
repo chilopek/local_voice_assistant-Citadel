@@ -175,9 +175,10 @@ class BrowserSession:
         if self._sensitive(evidence) or self._sensitive(form.get('action', '')):
             return verdict(True, "Potential state-changing control or form.")
         if requested_action == 'fill':
-            if info['search_input']:
-                return verdict(False, "Observed search input.")
-            return verdict(True, "Non-search input requires confirmation.")
+            if info['search_input'] or info['tag'] == 'textarea' or (
+                    info['tag'] == 'input' and info['type'] in {'', 'text', 'email', 'tel', 'number', 'url'}):
+                return verdict(False, "Fill a visible text field without submitting.")
+            return verdict(True, "Unknown input type requires confirmation.")
         if requested_action == 'press':
             if key == 'Enter' and info['search_input']:
                 return verdict(False, "Submit an observed search input.")

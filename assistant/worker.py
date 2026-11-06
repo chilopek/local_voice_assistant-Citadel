@@ -119,7 +119,8 @@ def main() -> int:
                 if event.get("type") in {"thinking", "tool_result", "done"}:
                     emit("messages", messages)
             result = run_turn(client, memory, messages, text, confirm=confirm,
-                              on_event=progress, cancel_event=cancel,goal_text=payload.get('goal_text'),resume_receipts=payload.get('resume_receipts'))
+                              on_event=progress, cancel_event=cancel,goal_text=payload.get('goal_text'),
+                              resume_receipts=payload.get('resume_receipts'), previous_window=payload.get('previous_window'))
             if cancel.is_set():
                 return
             # Commit conversation before synthesis, so a speech failure loses no answer.

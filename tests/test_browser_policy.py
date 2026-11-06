@@ -62,7 +62,7 @@ class BrowserPolicyTests(unittest.TestCase):
         for kind in ['password', 'file']:
             for action in ['click', 'fill', 'press', 'select']:
                 self.assertTrue(self.assess(action, tag='input', type=kind)['requires_confirmation'])
-        self.assertTrue(self.assess('fill', tag='textarea')['requires_confirmation'])
+        self.assertFalse(self.assess('fill', tag='textarea')['requires_confirmation'])
         self.assertTrue(self.assess('press', tag='textarea')['requires_confirmation'])
         self.assertTrue(self.assess(type='submit', form=dict(method='post', search=False))['requires_confirmation'])
         self.assertTrue(self.assess(type='submit', role='tab', form=dict(method='post', search=False))['requires_confirmation'])

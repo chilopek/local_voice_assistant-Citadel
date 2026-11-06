@@ -9,10 +9,30 @@ import re
 import datetime as dt
 
 
+def spoken_time(hour: int, minute: int) -> str:
+    def number(value: int, feminine: bool = False) -> str:
+        units = ("", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять",
+                 "десять", "одиннадцать", "двенадцать", "тринадцать", "четырнадцать", "пятнадцать",
+                 "шестнадцать", "семнадцать", "восемнадцать", "девятнадцать")
+        tens = ("", "", "двадцать", "тридцать", "сорок", "пятьдесят")
+        base, rest = (tens[value // 10], value % 10) if value >= 20 else ("", value)
+        tail = {1: "одну", 2: "две"}.get(rest, units[rest]) if feminine else units[rest]
+        return " ".join(part for part in (base, tail) if part) or "ноль"
+
+    def unit(value: int, forms: tuple[str, str, str]) -> str:
+        return forms[2] if 11 <= value % 100 <= 14 else forms[0] if value % 10 == 1 else forms[1] if 2 <= value % 10 <= 4 else forms[2]
+
+    hours = number(hour) + " " + unit(hour, ("час", "часа", "часов"))
+    if not minute:
+        return hours + " ровно"
+    return hours + " " + number(minute, True) + " " + unit(minute, ("минуту", "минуты", "минут"))
+
+
 def reminder_text(item: dict, metadata: bool = True) -> str:
     when = dt.datetime.fromisoformat(item['due_at']).astimezone()
     months = ('января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря')
-    answer = f"Напомню {when.day} {months[when.month-1]} в {when:%H:%M}: {item['title']}."
+    clock = when.strftime("%H:%M") if metadata else spoken_time(when.hour, when.minute)
+    answer = f"Напомню {when.day} {months[when.month-1]} в {clock}: {item['title']}."
     repeat = item.get('repeat',0)
     if repeat:
         answer += f" Повтор с интервалом {repeat/60:g} минут." if repeat%60==0 else f" Повтор с интервалом {repeat:g} секунд."

@@ -42,6 +42,7 @@ class AssistantGUI:
         self.memory = Memory(PROJECT_ROOT / "data" / "memory.sqlite3")
         self.messages: list[dict[str, Any]] = self._initial_messages()
         self.history = Conversations(PROJECT_ROOT / 'data/conversations.sqlite3',timeout=.2) if enable_history else None
+        self._headset = bool(self.history and self.history.setting("headset", False))
         self._chat_id = None
         self._turn_id = None
         self.suggestions_enabled = threading.Event()
@@ -66,6 +67,7 @@ class AssistantGUI:
         self._personal_path = PROJECT_ROOT / 'data/personal.sqlite3'
         self.scheduler = None
         self._voice_setup = None
+        self._previous_window = None
         self._voice_reload_pending = False
         self.voice_setup_var = tk.StringVar(value='Выбор модели применяется после перезапуска приложения.')
         self._session_id: str | None = None
@@ -349,7 +351,8 @@ class AssistantGUI:
 
     def _start_process(self, mode: str, text: str = "") -> None:
         self._agent_running = True
-        payload = {"mode": mode, "text": text, "messages": self.messages, "speak": False}
+        payload = {"mode": mode, "text": text, "messages": self.messages, "speak": False,
+                   "previous_window": self._previous_window}
         if self.history and self._chat_id:
             import re
             continuation = bool(re.fullmatch(r'\s*(?:продолжи|продолжай|continue|resume)[.!\s]*', text, re.I))
@@ -387,7 +390,7 @@ class AssistantGUI:
                               module="assistant.voice_host")
         self.voice_host = host
         self.voice_status_var.set("Подготовка голоса при запуске…")
-        host.start({"speech": speech})
+        host.start({"speech": speech, "headset": self._headset})
 
     def _voice_event(self, sid: str, event: str, data: Any) -> None:
         if not self.voice_host or sid != self.voice_host.id:
@@ -620,6 +623,11 @@ class AssistantGUI:
         self.mic_level_var.set(text)
 
     def _drain_events(self) -> None:
+        import os
+        from .desktop import foreground_window
+        active = foreground_window()
+        if active and active[1] != os.getpid():
+            self._previous_window = active
         if self.closed.is_set():
             return
         if self._pending_confirmation and self.cancel_event.is_set():
@@ -861,6 +869,15 @@ class AssistantGUI:
             refresh_history()
         voice_settings = ttk.Frame(notebook,padding=16)
         notebook.add(voice_settings,text='Голос')
+        headset = tk.BooleanVar(value=self._headset)
+        def set_headset():
+            self._headset = headset.get()
+            if self.history:
+                self.history.set_setting("headset", self._headset)
+            if self.voice_host:
+                self.voice_host.send({"command": "headset", "enabled": self._headset})
+        ttk.Checkbutton(voice_settings, text="Гарнитура · слушать «Цитадель» во время ответа",
+                        variable=headset, command=set_headset).pack(anchor="w", pady=(0, 8))
         ttk.Label(voice_settings,text='Распознавание речи',style='Title.TLabel').pack(anchor='w')
         ttk.Label(voice_settings,text='Base — быстрее. Small — точнее, но требует больше памяти и времени.\nМодель скачивается только при нажатии кнопки подготовки.',wraplength=650).pack(anchor='w',pady=12)
         from .config import LOCAL_CONFIG_PATH, VOICE_STT_LANGUAGE, VOICE_STT_MODEL, VOICE_TTS_SPEAKER

@@ -245,6 +245,17 @@ def quick_request(text: str) -> tuple[str, dict] | None:
     """Only explicit, unambiguous user requests. Other wording goes to the agent."""
     if re.search(r"\b(?:потом|затем|также)\b|(?:[.;!?]\s+|\s+и\s+)(?:открой|создай|запусти|найди|сохрани|скачай|удали|напомни|запомни)\b", text, re.I):
         return None
+    absolute = re.fullmatch(
+        r"\s*напомни\s+(?:(сегодня|завтра)\s+)?(?:в|на)\s+([01]?\d|2[0-3])[:.]([0-5]\d)(?:\s*[,—-])?\s+(.+)",
+        text, re.I,
+    )
+    if absolute:
+        day, hour, minute, title = absolute.groups()
+        now = dt.datetime.now().astimezone()
+        when = now.replace(hour=int(hour), minute=int(minute), second=0, microsecond=0)
+        if day and day.casefold() == "завтра" or day is None and when <= now:
+            when += dt.timedelta(days=1)
+        return "create_reminder", {"title": title.strip(), "due_at": when.isoformat()}
     numbers = {'один':1,'одну':1,'два':2,'две':2,'три':3,'четыре':4,'пять':5,'шесть':6,'семь':7,'восемь':8,'девять':9,'десять':10,'пятнадцать':15,'двадцать':20,'тридцать':30,'сорок':40,'пятьдесят':50,'шестьдесят':60}
     quantity = r'(\d+(?:[.,]\d+)?|' + '|'.join(numbers) + ')'
     match = re.fullmatch(r"\s*(?:поставь\s+)?таймер\s+(?:на\s+)?" + quantity + r"\s*(секунд\w*|минут\w*|час\w*)[.!]?\s*", text, re.I)

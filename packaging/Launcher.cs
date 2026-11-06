@@ -5,8 +5,8 @@ using System.Reflection;
 using System.Windows.Forms;
 
 [assembly: AssemblyTitle("Citadel")]
-[assembly: AssemblyVersion("0.9.2.0")]
-[assembly: AssemblyFileVersion("0.9.2.0")]
+[assembly: AssemblyVersion("0.9.3.0")]
+[assembly: AssemblyFileVersion("0.9.3.0")]
 
 internal static class Launcher
 {

@@ -18,7 +18,7 @@ from .config import WORKSPACE, is_inside_workspace  # compatibility for older ap
 from .paths import PYTHON_EXE
 from .application_catalog import Application, catalog, find_apps, resolve_application
 from .permissions import (creation_requires_confirmation, download_requires_confirmation,
-                          ordinary_document, protected_path)
+                          ordinary_document, protected_path, project_write_allowed)
 
 
 _confirmed_execution: ContextVar[bool] = ContextVar("confirmed_tool_execution", default=False)
@@ -72,7 +72,8 @@ def write_file(path: str, content: str, validate_python: bool = False) -> dict[s
         raise PermissionError("Запись в защищённое расположение требует подтверждения.")
     file_path.parent.mkdir(parents=True, exist_ok=True)
     # O_EXCL closes the check/create race, including a newly inserted symlink.
-    with file_path.open("w" if _confirmed_execution.get() else "x", encoding="utf-8") as output:
+    overwrite = _confirmed_execution.get() or (file_path.is_file() and project_write_allowed(file_path, WORKSPACE))
+    with file_path.open("w" if overwrite else "x", encoding="utf-8") as output:
         output.write(content)
     verified = file_path.read_text(encoding='utf-8')==content
     with file_path.open('rb') as source:
@@ -301,7 +302,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Создать новый текстовый файл в обычной папке без подтверждения. Перезапись и защищённые расположения требуют подтверждения.",
+            "description": "Создать текстовый файл или обновить файл в рабочей папке. Перезапись вне проекта и защищённые расположения требуют подтверждения.",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}, "content": {"type": "string"},'validate_python':{'type':'boolean'}},
@@ -354,7 +355,7 @@ def download_file(url: str, path: str) -> dict:
     from .web_tools import validate_url
     destination = _resolve_workspace_path(path)
     validate_url(url)
-    if download_requires_confirmation(destination) and not _confirmed_execution.get():
+    if download_requires_confirmation(destination, WORKSPACE) and not _confirmed_execution.get():
         raise PermissionError("Перезапись, защищённый путь или активный тип загрузки требуют подтверждения.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     total = 0
@@ -362,7 +363,8 @@ def download_file(url: str, path: str) -> dict:
     # Never invoke a handler or execute downloaded content. A failed transfer may
     # leave a partial file; do not unlink a path another process may have replaced.
     with urllib.request.urlopen(request, timeout=30) as source:
-        with destination.open("wb" if _confirmed_execution.get() else "xb") as output:
+        overwrite = _confirmed_execution.get() or (destination.is_file() and project_write_allowed(destination, WORKSPACE))
+        with destination.open("wb" if overwrite else "xb") as output:
             while chunk := source.read(65536):
                 total += len(chunk)
                 if total > 100_000_000:
@@ -417,11 +419,11 @@ def _schema(name: str, description: str, properties: dict, required: list[str] |
 
 
 from .web_tools import search_web, fetch_url
-from .desktop import desktop_snapshot, desktop_action, take_screenshot
+from .desktop import close_window, desktop_snapshot, desktop_action, take_screenshot
 from .context_tools import read_screen, get_location
 from .personal import (create_reminder, list_reminders, cancel_reminder, snooze_reminder,
                        watch_process, watch_file, remember_fact, list_memory, forget_fact)
-from .system_tools import system_status, list_processes, find_files
+from .system_tools import system_status, list_processes, find_files, power_action
 
 
 def insert_text(window_handle: int, text: str, control_id: str = '', language: str = 'text') -> dict:
@@ -436,6 +438,7 @@ TOOL_FUNCTIONS.update({name: function for name, function in {
     "browser_open": browser_open, "browser_snapshot": browser_snapshot, "browser_action": browser_action,
     "browser_search": browser_search, "open_file": open_file, "open_path": open_path,
     "desktop_snapshot": desktop_snapshot, "desktop_action": desktop_action, "take_screenshot": take_screenshot,
+    "close_window": close_window, "power_action": power_action,
     "update_plan": update_plan,
     "read_screen": read_screen, "get_location": get_location,
     "create_reminder": create_reminder, "list_reminders": list_reminders,
@@ -451,12 +454,14 @@ TOOL_FUNCTIONS.update({name: function for name, function in {
 _str = {"type": "string"}
 _int = {"type": "integer"}
 TOOL_SCHEMAS.extend([
+    _schema("close_window", "Закрыть текущее окно или окно с указанным заголовком. Windows может попросить сохранить изменения. Проверяет, закрылось ли окно.", {"title": _str}),
+    _schema("power_action", "Выключить компьютер или перевести его в спящий режим по прямой просьбе. Требует подтверждения.", {"action": {"type": "string", "enum": ["shutdown", "sleep"]}}, ["action"]),
     _schema("find_apps", "Найти имена зарегистрированных приложений Windows и ярлыков по части названия. Прочитанные названия можно передать в launch_program.", {"query": _str, "limit": _int}, ["query"]),
     _schema('list_file_revisions','Показать резервные версии после правок edit_file: revision_id, path, expected_sha256, created, can_restore. Используй перед восстановлением по просьбе пользователя. Исходное содержимое не возвращает.',{'path':_str}),
     _schema('read_document','Прочитать текст PDF/DOCX/XLSX/PPTX без запуска Office и макросов. Для сканов PDF нужен OCR; текстовый слой может отсутствовать. Для продолжения передай next_start как start.',{'path':_str,'start':_int,'max_chars':_int},['path']),
     _schema('search_file_contents','Найти буквальную строку внутри текстовых файлов в выбранной папке. Возвращает путь, номер строки, фрагмент и SHA256. Поиск ограничен временем/размером, truncated означает неполный результат.',{'query':_str,'path':_str,'max_results':_int},['query']),
-    _schema('edit_file','Точечно заменить ровно один фрагмент существующего текстового файла. Сначала read_file: expected_sha256 из актуального чтения. Автоматически сохраняет резервную версию. Изменение подтверждает пользователь.',{'path':_str,'old_text':_str,'new_text':_str,'expected_sha256':_str,'validate_python':{'type':'boolean'}},['path','old_text','new_text','expected_sha256']),
-    _schema('restore_file_revision','По просьбе пользователя восстановить резервную версию после edit_file. expected_sha256 должен совпадать с SHA256 изменённого файла. Более поздние изменения не перезаписываются. Требует подтверждения.',{'revision_id':_str,'expected_sha256':_str},['revision_id','expected_sha256']),
+    _schema('edit_file','Точечно заменить один фрагмент. Сначала read_file: expected_sha256 из актуального чтения. Сохраняет резервную версию. Подтверждение нужно вне проекта или в защищённом месте.',{'path':_str,'old_text':_str,'new_text':_str,'expected_sha256':_str,'validate_python':{'type':'boolean'}},['path','old_text','new_text','expected_sha256']),
+    _schema('restore_file_revision','Восстановить резервную версию по просьбе пользователя. expected_sha256 должен совпадать с SHA256 изменённого файла. Подтверждение нужно вне проекта или в защищённом месте.',{'revision_id':_str,'expected_sha256':_str},['revision_id','expected_sha256']),
     _schema('ask_user','Запросить обязательный недостающий параметр и приостановить текущую задачу до ответа пользователя. Не использовать для обычных безопасных действий или выбора имени нового файла.',{'question':_str},['question']),
     _schema('browser_media','Воспроизвести или приостановить наблюдённый HTML audio/video. action: play/pause, index из media в browser_snapshot. Для авторизации сначала browser_open(visible=true), вход пользователь выполняет сам.',{'action':_str,'index':_int}),
     _schema('system_status','Снять реальные показатели CPU, RAM, места на дисках и скорости дисковых операций. Чтение без подтверждения.',{'sample_seconds':{'type':'number'}}),
@@ -519,16 +524,23 @@ def needs_confirmation(name: str, arguments: dict[str, Any]) -> bool:
         except Exception:
             return True
     if name == "desktop_action":
-        return arguments.get("action") != "focus"
+        from .desktop import requires_confirmation
+        return requires_confirmation(arguments.get("action", ""), arguments.get("window_handle", 0),
+                                     arguments.get("control_id", ""))
+    if name == "edit_file":
+        return not project_write_allowed(_resolve_workspace_path(arguments["path"]), WORKSPACE)
+    if name == "restore_file_revision":
+        from .file_tools import revision_path
+        return not project_write_allowed(revision_path(arguments["revision_id"]), WORKSPACE)
     if name in {"write_file", "download_file", "open_file", "open_path"}:
         if not isinstance(arguments.get("path"), str) or not arguments["path"].strip():
             return True
         try:
             path = _resolve_workspace_path(arguments["path"])
             if name == "write_file":
-                return creation_requires_confirmation(path)
+                return creation_requires_confirmation(path, WORKSPACE)
             if name == "download_file":
-                return download_requires_confirmation(path)
+                return download_requires_confirmation(path, WORKSPACE)
             return not path.exists() or not ordinary_document(path)
         except (OSError, ValueError):
             return True
@@ -536,13 +548,15 @@ def needs_confirmation(name: str, arguments: dict[str, Any]) -> bool:
         return True
     return name not in {"get_time", "get_environment", "read_file", "list_files", "find_apps",
                         "search_web", "fetch_url", "open_url", "browser_open", "browser_search",
-                        "browser_snapshot", "desktop_snapshot", "take_screenshot", "read_screen",
+                        "browser_snapshot", "desktop_snapshot", "take_screenshot", "read_screen", "close_window",
                         "get_location", "update_plan", "select_tools", "create_reminder", "list_reminders", 'read_document','search_file_contents','list_file_revisions',
                         "cancel_reminder", "snooze_reminder", "watch_process", "watch_file",
                         "remember_fact", "list_memory", "forget_fact", "system_status","list_processes","find_files","browser_media","ask_user"}
 
 
 def confirmation_reason(name: str, arguments: dict[str, Any]) -> str:
+    if name == "power_action":
+        return "Выключить компьютер." if arguments.get("action") == "shutdown" else "Перевести компьютер в спящий режим."
     if name == "write_file":
         return "Перезапись существующего файла или запись в системное/служебное расположение."
     if name in {"open_file", "open_path", "launch_program"}:

@@ -164,6 +164,28 @@ class OpeningTests(unittest.TestCase):
         self.assertIn("30%", answer)
         model.chat.assert_not_called()
 
+    def test_close_window_uses_previous_window_without_confirmation_or_model(self):
+        model = Mock()
+        close = Mock(return_value={"closed": True, "message": "Окно закрыто."})
+        with tempfile.TemporaryDirectory() as folder, patch.object(app, "PROJECT_ROOT", Path(folder)), \
+                patch.dict(tools.TOOL_FUNCTIONS, {"close_window": close}):
+            answer = app.run_turn(model, Memory(Path(folder) / "memory.sqlite"), [], "Закрой окно",
+                                  previous_window=(42, 123), confirm=Mock(side_effect=AssertionError))
+        close.assert_called_once_with(title="", previous_window=(42, 123))
+        self.assertEqual(answer, "Окно закрыто.")
+        model.chat.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows power commands")
+    def test_shutdown_requires_confirmation_and_never_passes_force(self):
+        arguments = {"action": "shutdown"}
+        with patch("assistant.system_tools.subprocess.run") as run:
+            self.assertTrue(tools.needs_confirmation("power_action", arguments))
+            with self.assertRaises(PermissionError):
+                tools.execute("power_action", arguments)
+            run.assert_not_called()
+            tools.execute("power_action", arguments, confirmed=True)
+            self.assertEqual(run.call_args.args[0][1:], ["/s", "/t", "0"])
+
     @unittest.skipUnless(sys.platform == "win32", "Windows process flags")
     def test_shell_launch_in_worker_breaks_away_from_cancelled_job(self):
         from assistant.application_catalog import Application

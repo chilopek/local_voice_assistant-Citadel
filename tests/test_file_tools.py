@@ -27,8 +27,8 @@ class FileToolTests(unittest.TestCase):
         self.assertEqual(current['encoding'],'cp1251')
         self.assertIn('Старый текст',current['content'])
         args={'path':str(target),'old_text':'Старый текст','new_text':'Новый текст','expected_sha256':current['sha256']}
-        with self.assertRaises(PermissionError): tools.execute('edit_file',args)
-        changed=tools.execute('edit_file',args,confirmed=True)
+        self.assertFalse(tools.needs_confirmation('edit_file',args))
+        changed=tools.execute('edit_file',args)
         self.assertTrue(changed['verified'])
         versions=tools.execute('list_file_revisions',{'path':str(target)})
         self.assertEqual(versions[0]['revision_id'],changed['revision_id'])

@@ -207,6 +207,11 @@ class RecognitionTests(unittest.TestCase):
 
 
 class SpeechTests(unittest.TestCase):
+    def test_reminder_clock_is_spoken_as_words(self):
+        expected = "Напоминание на шестнадцать часов сорок пять минут."
+        self.assertEqual(VoiceSession._speech_text("Напоминание на 16.45."), expected)
+        self.assertEqual(VoiceSession._speech_text("Напоминание на 16:45."), expected)
+
     def test_markdown_and_urls_are_cleaned(self):
         text = "# Ответ\n- **Читайте** [инструкцию](https://example.org/help).\n> `текст` https://example.org\n```python\nsecret()\n```"
         self.assertEqual(VoiceSession._speech_text(text), "Ответ Читайте инструкцию. текст код пропущен")

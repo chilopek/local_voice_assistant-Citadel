@@ -28,6 +28,26 @@ class FakeVoice:
 
 
 class VoiceHostTests(unittest.TestCase):
+    def test_headset_wake_command_interrupts_playback(self):
+        playback_started = threading.Event()
+
+        class Voice:
+            def capture_utterance(self, stop, max_seconds):
+                return "Цитадель, закрой окно" if playback_started.wait(1) else None
+
+            def speak(self, text, cancel_event):
+                playback_started.set()
+                deadline = time.monotonic() + 1
+                while not cancel_event.is_set() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.interrupted = cancel_event.is_set()
+
+        voice = Voice()
+        service = ResidentVoice(voice, lambda *_: None)
+        service.headset = service.listening = True
+        self.assertEqual(service.speak("Тест озвучки"), ("закрой окно", False))
+        self.assertTrue(voice.interrupted)
+
     def wait(self, predicate):
         deadline = time.monotonic() + 3
         while not predicate() and time.monotonic() < deadline:
