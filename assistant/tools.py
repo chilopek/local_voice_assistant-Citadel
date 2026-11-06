@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 from .config import WORKSPACE, is_inside_workspace  # compatibility for older app/test integrations
 from .paths import PYTHON_EXE
+from .application_catalog import Application, find_apps, resolve_application
 from .permissions import (creation_requires_confirmation, download_requires_confirmation,
                           ordinary_document, protected_path)
 
@@ -156,11 +157,12 @@ def _trusted_programs() -> dict[str, tuple[str, list[Path]]]:
     return programs
 
 
-def _resolve_launch(program: str) -> tuple[str, str | None]:
+def _resolve_launch(program: str) -> tuple[Application, str | None]:
     if not isinstance(program, str) or not program.strip():
         raise ValueError("Укажи программу.")
     if sys.platform != "win32":
-        return program, None
+        return Application(program, program, "explicit"), None
+    program = program.strip()
     aliases = {"calculator": "calc", "калькулятор": "calc", "блокнот": "notepad",
                "paint": "mspaint", "проводник": "explorer", "chrome": "chrome",
                "хром": "chrome", "google chrome": "chrome", "edge": "msedge"}
@@ -168,18 +170,29 @@ def _resolve_launch(program: str) -> tuple[str, str | None]:
     name = program.lower().removesuffix(".exe") if bare else Path(program).stem.lower()
     name = aliases.get(name, name)
     entry = _trusted_programs().get(name)
-    if not entry:
-        return program, None
-    kind, candidates = entry
-    # An explicit path must itself match a trusted installation path.
+    if entry:
+        kind, candidates = entry
+        for candidate in candidates:
+            if not bare and candidate.absolute() != Path(program).absolute():
+                continue
+            if candidate.is_file() and candidate.resolve() == candidate.absolute():
+                return Application(program, str(candidate), "system"), kind
     if not bare:
-        candidates = [p for p in candidates if p.absolute() == Path(program).absolute()]
-        if not candidates:
-            return program, None
-    for candidate in candidates:
-        if candidate.is_file() and candidate.resolve() == candidate.absolute():
-            return str(candidate.resolve()), kind
-    raise FileNotFoundError(f"Программа {program} не найдена в доверенных установленных расположениях. Установка не выполнялась.")
+        path = Path(program)
+        return Application(path.stem, program, "explicit", path.suffix.lower() in {".lnk", ".url"}), None
+    registered = resolve_application(program)
+    if registered:
+        executable = Path(registered.executable).stem.casefold()
+        command_hosts = {"cmd", "powershell", "pwsh", "wscript", "cscript", "mshta",
+                         "rundll32", "regsvr32", "msiexec", "python", "pythonw", "py",
+                         "bash", "wsl", "wt", "windowsterminal"}
+        maintenance = executable.startswith(("unins", "setup", "install")) or registered.name.casefold().startswith(
+            ("uninstall", "удаление", "деинсталляция"))
+        requires_confirmation = executable in command_hosts or maintenance or registered.target.lower().endswith(".url")
+        kind = None if requires_confirmation else "registered"
+        return registered, kind
+    raise FileNotFoundError(f"«{program}» не найдено среди приложений Windows и ярлыков. "
+                            "Укажи точное имя, ярлык или полный путь. Установка не выполнялась.")
 
 
 def _safe_launch_arguments(kind: str | None, arguments: Any) -> bool:
@@ -201,15 +214,43 @@ def _safe_launch_arguments(kind: str | None, arguments: Any) -> bool:
 
 
 def launch_program(program: str, arguments: list[str] | None = None) -> dict[str, Any]:
-    executable, _ = _resolve_launch(program)
+    target, kind = _resolve_launch(program)
+    if arguments is not None and (not isinstance(arguments, list) or not all(isinstance(arg, str) for arg in arguments)):
+        raise ValueError("Аргументы запуска должны быть списком строк.")
+    if sys.platform == "win32":
+        if not _safe_launch_arguments(kind, arguments) and not _confirmed_execution.get():
+            raise PermissionError("Запуск с этими параметрами требует подтверждения.")
+        if target.source == "explicit":
+            path = Path(target.target)
+            if not path.is_absolute() or path.suffix.lower() not in {".exe", ".lnk", ".url"} or not path.is_file():
+                raise FileNotFoundError("Укажи существующий абсолютный путь к EXE или ярлыку Windows.")
+        if target.shell:
+            if arguments:
+                raise ValueError("У ярлыка уже есть параметры запуска. Используй его без дополнительных аргументов.")
+            if os.environ.get("CITADEL_WORKER_JOB") == "1":
+                # ShellExecute may start a child directly. Run it outside the
+                # worker job so Stop cannot close the user's new application.
+                result = subprocess.run(
+                    [str(PYTHON_EXE), "-c", "import os, sys; os.startfile(sys.argv[1], 'open')", target.target],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_BREAKAWAY_FROM_JOB,
+                    timeout=15,
+                )
+                if result.returncode:
+                    raise OSError(f"Windows отклонила запуск ярлыка «{target.name}».")
+            else:
+                os.startfile(target.target, "open")
+            return {"program": target.name, "source": target.source, "request_accepted": True}
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     if sys.platform == "win32" and os.environ.get("CITADEL_WORKER_JOB") == "1":
         flags |= subprocess.CREATE_BREAKAWAY_FROM_JOB
-    process = subprocess.Popen([executable, *(arguments or [])], cwd=WORKSPACE, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
-    return {"program": executable, "pid": process.pid, "launched": True, "request_accepted": True}
+    directory = Path(target.target).parent if target.source in {"app_paths", "apps_folder"} else WORKSPACE
+    process = subprocess.Popen([target.target, *(arguments or [])], cwd=directory, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+    return {"program": target.target, "source": target.source, "pid": process.pid, "launched": True, "request_accepted": True}
 
 
 TOOL_FUNCTIONS: dict[str, Callable[..., Any]] = {
+    "find_apps": find_apps,
     "get_time": get_time,
     "list_files": list_files,
     "read_file": read_file,
@@ -283,7 +324,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "launch_program",
-            "description": "Запустить установленную программу Windows (например chrome или calc). Доверенные обычные запуски не требуют подтверждения. Если программа отсутствует, сообщи ошибку; не устанавливай её без поручения.",
+            "description": "Запустить программу или игру Windows по видимому названию, ярлыку или полному пути к EXE. Передай название как его назвал пользователь. Windows запускает зарегистрированный ярлык с его параметрами.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -409,6 +450,7 @@ TOOL_FUNCTIONS.update({name: function for name, function in {
 _str = {"type": "string"}
 _int = {"type": "integer"}
 TOOL_SCHEMAS.extend([
+    _schema("find_apps", "Найти имена зарегистрированных приложений Windows и ярлыков по части названия. Прочитанные названия можно передать в launch_program.", {"query": _str, "limit": _int}, ["query"]),
     _schema('list_file_revisions','Показать резервные версии после правок edit_file: revision_id, path, expected_sha256, created, can_restore. Используй перед восстановлением по просьбе пользователя. Исходное содержимое не возвращает.',{'path':_str}),
     _schema('read_document','Прочитать текст PDF/DOCX/XLSX/PPTX без запуска Office и макросов. Для сканов PDF нужен OCR; текстовый слой может отсутствовать. Для продолжения передай next_start как start.',{'path':_str,'start':_int,'max_chars':_int},['path']),
     _schema('search_file_contents','Найти буквальную строку внутри текстовых файлов в выбранной папке. Возвращает путь, номер строки, фрагмент и SHA256. Поиск ограничен временем/размером, truncated означает неполный результат.',{'query':_str,'path':_str,'max_results':_int},['query']),
@@ -491,7 +533,7 @@ def needs_confirmation(name: str, arguments: dict[str, Any]) -> bool:
             return True
     if name in CONFIRMATION_REQUIRED:
         return True
-    return name not in {"get_time", "get_environment", "read_file", "list_files",
+    return name not in {"get_time", "get_environment", "read_file", "list_files", "find_apps",
                         "search_web", "fetch_url", "open_url", "browser_open", "browser_search",
                         "browser_snapshot", "desktop_snapshot", "take_screenshot", "read_screen",
                         "get_location", "update_plan", "select_tools", "create_reminder", "list_reminders", 'read_document','search_file_contents','list_file_revisions',

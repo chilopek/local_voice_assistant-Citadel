@@ -56,7 +56,7 @@
 
 ### Вариант 1: EXE-установщик
 
-Скачайте [установщик Цитадели 0.9](https://github.com/chilopek/local_voice_assistant-Citadel/releases/download/v0.9.0/LocalAssistantSetup.exe), запустите файл и выберите режим:
+Скачайте [установщик Цитадели](https://github.com/chilopek/local_voice_assistant-Citadel/releases/latest/download/LocalAssistantSetup.exe), запустите файл и выберите режим:
 
 - `auto` — автоматический подбор по характеристикам компьютера;
 - `fast` — минимальная задержка и небольшая модель;

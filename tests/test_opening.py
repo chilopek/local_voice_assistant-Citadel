@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -16,6 +17,11 @@ def call(name, arguments):
 
 
 class OpeningTests(unittest.TestCase):
+    def setUp(self):
+        fixture = patch("assistant.application_catalog.catalog", return_value=[])
+        self.catalog = fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_default_browser_once_without_managed_browser(self):
         with patch.object(tools.sys, "platform", "win32"), patch.object(tools.os, "startfile", create=True) as start, \
                 patch("assistant.browser.BROWSER.call") as managed, patch.object(tools.webbrowser, "open") as other:
@@ -53,9 +59,95 @@ class OpeningTests(unittest.TestCase):
                 result = tools.launch_program("calc.exe")
                 self.assertEqual(popen.call_args.args[0], [str(exe.resolve())])
                 self.assertEqual(result["pid"], 123)
-                for program, args in (("calc", ["/evil"]), (str(Path(folder) / "calc.exe"), []),
-                                      ("powershell.exe", []), ("cmd.exe", []), ("installer.exe", [])):
+                for program, args in (("calc", ["/evil"]), (str(Path(folder) / "calc.exe"), [])):
                     self.assertTrue(tools.needs_confirmation("launch_program", {"program": program, "arguments": args}))
+                for program in ("powershell.exe", "cmd.exe", "installer.exe"):
+                    with self.assertRaises(FileNotFoundError):
+                        tools.needs_confirmation("launch_program", {"program": program})
+
+    def test_game_launch_uses_original_registered_shortcut_without_model(self):
+        from assistant.application_catalog import Application
+
+        shortcut = r"C:\Users\Gamer\Desktop\VALORANT.lnk"
+        self.catalog.return_value = [
+            Application("VALORANT", shortcut, "shortcut", True,
+                        r"D:\Games\RiotClientServices.exe", "--launch-product=valorant"),
+            Application("VALORANT", r"D:\Games\RiotClientServices.exe", "apps_folder"),
+        ]
+        model = Mock()
+        confirm = Mock(side_effect=AssertionError("unexpected confirmation"))
+        with tempfile.TemporaryDirectory() as folder, patch.object(app, "PROJECT_ROOT", Path(folder)), \
+                patch.object(tools.sys, "platform", "win32"), \
+                patch.object(tools.os, "startfile", create=True) as start:
+            answer = app.run_turn(model, Memory(Path(folder) / "memory.sqlite"), [],
+                                  "Открой игру Валорант", confirm=confirm)
+        start.assert_called_once_with(shortcut, "open")
+        model.chat.assert_not_called()
+        confirm.assert_not_called()
+        self.assertEqual(answer, "Windows приняла запрос на запуск: VALORANT")
+
+    def test_conflicting_shortcuts_ask_which_target_to_launch(self):
+        from assistant.application_catalog import Application
+
+        self.catalog.return_value = [
+            Application("Studio", r"C:\Start\Studio.lnk", "shortcut", True, r"D:\Studio.exe"),
+            Application("Studio", r"C:\Desktop\Studio.lnk", "shortcut", True, r"E:\Studio.exe"),
+        ]
+        events = []
+        with tempfile.TemporaryDirectory() as folder, patch.object(app, "PROJECT_ROOT", Path(folder)), \
+                patch.object(tools.sys, "platform", "win32"), \
+                patch.object(tools.os, "startfile", create=True) as start:
+            answer = app.run_turn(Mock(), Memory(Path(folder) / "memory.sqlite"), [],
+                                  "Открой Studio", on_event=events.append)
+        start.assert_not_called()
+        self.assertIn("Какой открыть?", answer)
+        self.assertTrue(events[-1]["needs_input"])
+
+    def test_compound_request_launches_registered_app_then_keeps_other_tools_available(self):
+        from assistant.application_catalog import Application
+
+        shortcut = r"C:\Start\Note Studio.lnk"
+        self.catalog.return_value = [Application("Note Studio", shortcut, "shortcut", True,
+                                                 r"C:\Program Files\Note Studio\Studio.exe")]
+        model = Mock()
+        model.chat.side_effect = [call("system_status", {}), {"message": {"content": "Загрузка CPU 25%."}}]
+        events = []
+        with tempfile.TemporaryDirectory() as folder, patch.object(app, "PROJECT_ROOT", Path(folder)), \
+                patch.object(tools.sys, "platform", "win32"), \
+                patch.object(tools.os, "startfile", create=True) as start, \
+                patch.dict(tools.TOOL_FUNCTIONS, {"system_status": lambda: {"cpu_percent": 25}}):
+            answer = app.run_turn(model, Memory(Path(folder) / "memory.sqlite"), [],
+                                  "Открой Note Studio и покажи загрузку процессора", on_event=events.append)
+        start.assert_called_once_with(shortcut, "open")
+        self.assertEqual([event["name"] for event in events if event["type"] == "tool_result"],
+                         ["launch_program", "system_status"])
+        self.assertIn("25%", answer)
+
+    def test_registered_script_host_shortcut_requires_confirmation_at_execution(self):
+        from assistant.application_catalog import Application
+
+        self.catalog.return_value = [Application("Utility", r"C:\Start\Utility.lnk", "shortcut", True,
+                                                 r"C:\Windows\System32\cmd.exe", "/c script.cmd")]
+        with patch.object(tools.sys, "platform", "win32"), patch.object(tools.os, "startfile", create=True) as start:
+            self.assertTrue(tools.needs_confirmation("launch_program", {"program": "Utility"}))
+            with self.assertRaises(PermissionError):
+                tools.execute("launch_program", {"program": "Utility"})
+            start.assert_not_called()
+            tools.execute("launch_program", {"program": "Utility"}, confirmed=True)
+            start.assert_called_once()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows process flags")
+    def test_shell_launch_in_worker_breaks_away_from_cancelled_job(self):
+        from assistant.application_catalog import Application
+
+        shortcut = r"C:\Start\Studio.lnk"
+        self.catalog.return_value = [Application("Studio", shortcut, "shortcut", True)]
+        with patch.dict(tools.os.environ, {"CITADEL_WORKER_JOB": "1"}), \
+                patch.object(tools.subprocess, "run", return_value=Mock(returncode=0)) as run:
+            result = tools.launch_program("Studio")
+        self.assertTrue(result["request_accepted"])
+        self.assertEqual(run.call_args.args[0][-1], shortcut)
+        self.assertTrue(run.call_args.kwargs["creationflags"] & tools.subprocess.CREATE_BREAKAWAY_FROM_JOB)
 
     def test_browser_flags_and_explorer_files_still_confirm(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -118,7 +210,7 @@ class OpeningTests(unittest.TestCase):
             app.run_turn(Model(), Memory(Path(folder) / "memory.sqlite"), messages, "открой гугл", confirm=confirm)
         start.assert_called_once()
         confirm.assert_not_called()
-        self.assertEqual({s["function"]["name"] for s in requests[0][1]}, {"open_url", "launch_program", "select_tools"})
+        self.assertEqual({s["function"]["name"] for s in requests[0][1]}, {"open_url", "launch_program", "find_apps", "select_tools"})
         self.assertEqual(len(requests), 1)
         self.assertEqual([m["tool_name"] for m in messages if m["role"] == "tool"], ["open_url"])
         self.assertTrue(json.loads(next(m["content"] for m in messages if m["role"] == "tool"))["ok"])

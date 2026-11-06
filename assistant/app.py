@@ -19,6 +19,7 @@ from .ollama_client import OllamaClient, OllamaError, conversation_context
 from .tools import TOOL_SCHEMAS, execute, format_tool_result, needs_confirmation
 from .speech import reminder_text, outcome_speech
 from .outcomes import wants_file,wants_editor,wants_edit
+from .application_catalog import AmbiguousApplication, resolve_application
 
 
 SYSTEM_PROMPT = """Ты — Цитадель, локальный агент пользователя на Windows. Отвечай по-русски.
@@ -71,7 +72,7 @@ CONVERSATION_PROMPT = """Ты — Цитадель. Отвечай кратко 
 select_tools подключает нужную группу; соблюдай подтверждения и отмену пользователя.
 """
 OPEN_PROMPT = """Ты — Цитадель. Выполни текущее поручение открыть сайт или установленную программу.
-Сайт: один вызов open_url с HTTP/HTTPS URL в браузере ОС по умолчанию. Программу: launch_program.
+Сайт: один вызов open_url с HTTP/HTTPS URL в браузере ОС по умолчанию. Программу или игру: launch_program с названием пользователя.
 Выбери URL по названию сайта, если он известен. Не ищи и не проверяй установку ради обычного открытия.
 Не устанавливай отсутствующие программы: сообщи, что программа не найдена.
 Результат request_accepted означает только принятие запуска: страница не прочитана и окно не проверено.
@@ -96,11 +97,11 @@ TOOL_GROUPS = {
     "general": {"get_environment","get_time"},
     "system": {"system_status","list_processes"},
     "personal": {"create_reminder", "list_reminders", "cancel_reminder", "snooze_reminder", "watch_process", "watch_file", "remember_fact", "list_memory", "forget_fact", "get_time"},
-    "opening": {"open_url", "launch_program"},
+    "opening": {"open_url", "launch_program", "find_apps"},
     "web": {"search_web", "fetch_url", "browser_search", "browser_open"},
     "browser": {"browser_open", "browser_search", "browser_snapshot", "browser_action", "browser_media", "search_web", "fetch_url", "open_url"},
     "files": {"list_files", "find_files", "read_file", "write_file", "open_file", "open_path", "download_file",'read_document','search_file_contents','edit_file','restore_file_revision','list_file_revisions'},
-    "desktop": {"desktop_snapshot", "desktop_action", "insert_text", "take_screenshot", "read_screen", "launch_program"},
+    "desktop": {"desktop_snapshot", "desktop_action", "insert_text", "take_screenshot", "read_screen", "launch_program", "find_apps"},
     "python": {"run_python", "run_powershell"},
 }
 SELECT_TOOLS = {"type": "function", "function": {
@@ -112,6 +113,22 @@ SELECT_TOOLS = {"type": "function", "function": {
 
 def _followup(text: str) -> bool:
     return bool(re.search(r"^(?:а\s+)?(?:теперь|ещё|еще|также|для него|для неё|его|её|это|там|продолжи|повтори|and|now|also|it\b)|(?:этот|этой|этого|предыдущ|указанн|тот же|ту же)", text.lower().strip()))
+
+
+def _registered_opening(text: str) -> str | None:
+    match = re.fullmatch(
+        r'\s*(?:открой|запусти|open|launch)\s+(?:(?:приложение|игру|программу)\s+)?([^\r\n]{1,160}?)\s*[.!?]?\s*',
+        text, re.I,
+    )
+    if not match:
+        return None
+    program = match[1].strip(' «»"')
+    if any(character in program for character in "\\/:"):
+        return None
+    try:
+        return program if resolve_application(program) is not None else None
+    except AmbiguousApplication:
+        return program
 
 
 def _conversation_only(text: str) -> bool:
@@ -224,6 +241,8 @@ def _tool_message(call: dict, result: dict) -> dict:
 
 def _opening_receipt(name: str, result: dict) -> str:
     value = result.get("result")
+    if name == "launch_program" and result.get("ok") and isinstance(value, dict) and value.get("request_accepted") and value.get("source") in {"shortcut", "apps_folder", "explicit"} and not value.get("launched"):
+        return f"Windows приняла запрос на запуск: {value['program']}"
     if result.get("ok") and isinstance(value, dict) and value.get("request_accepted") is True and value.get("launched") is True:
         if name == "open_url":
             return f"Ссылка передана основному браузеру: {value.get('url', '')}"
@@ -375,9 +394,19 @@ def run_turn(
     known_route = procedures.match(execution_text)
     successful_route = []
     research, groups = _task_tools(execution_text, messages)
+    launch_first = None
+    remaining_request = ""
+    if not goal_text:
+        parts = re.split(r'\s*,?\s+(?:а\s+)?(?:и\s+)?(?:затем|потом)\s+|\s+и\s+(?=покажи\b|прочитай\b|нажми\b|создай\b|найди\b|вставь\b)', user_text, maxsplit=1, flags=re.I)
+        launch_first = _registered_opening(parts[0])
+        if launch_first and len(parts) == 2:
+            remaining_request = parts[1]
+            _, following_groups = _task_tools(remaining_request, messages)
+            groups = groups | following_groups | {"desktop"}
+            research = False
     if reading_next: research,groups=False,{'files'}
     opening = groups == {"opening"}
-    must_open_source = _answer_page_request(execution_text)
+    must_open_source = _answer_page_request(remaining_request or execution_text)
     opened_source = False
     completion_reminded = False
     started = time.monotonic()
@@ -457,6 +486,8 @@ def run_turn(
     prefetch_reads = 0
     from .personal import quick_request
     quick = quick_request(user_text) if 'personal' in groups else None
+    if opening and launch_first:
+        quick = ("launch_program", {"program": launch_first})
     if reading_next: quick=reading_next
     quick_pending = bool(quick)
     from .outcomes import Outcomes
@@ -514,6 +545,9 @@ def run_turn(
             if research_fallback:
                 response = {'message':{'role':'assistant','tool_calls':[{'function':{'name':'browser_search','arguments':{'query':research_fallback,'provider':'bing'}}}]}}
                 research_fallback = None
+            elif step == 1 and launch_first and remaining_request:
+                response = {"message": {"role": "assistant", "tool_calls": [{"function": {
+                    "name": "launch_program", "arguments": {"program": launch_first}}}]}}
             elif quick_pending:
                 quick_pending = False
                 response = {"message": {"role": "assistant", "tool_calls": [{"function": {
@@ -661,6 +695,8 @@ def run_turn(
                             # A missing image/capability must not discard successful OCR.
                             if isinstance(value, dict):
                                 result["result"] = {**value, "image_error": str(error)}
+            except AmbiguousApplication as error:
+                result = {"ok": False, "error": str(error), "needs_input": True}
             except Exception as error:
                 result = {"ok": False, "error": str(error)}
             # Strip binary data on every path, including failed/cancelled screen reads.
@@ -730,8 +766,16 @@ def run_turn(
                 receipts.append("Дополнительные действия не выполнялись.")
             answer = "\n".join(receipts)
             messages.append({"role": "assistant", "content": answer})
-            event("done", answer=answer)
+            event("done", answer=answer, needs_input=bool(len(calls) == 1 and result.get("needs_input")))
             return answer
+        if step == 1 and launch_first and remaining_request:
+            launch_summary = _opening_receipt("launch_program", result)
+            if not result.get("ok"):
+                messages.append({"role": "assistant", "content": launch_summary})
+                event("done", answer=launch_summary, needs_input=bool(result.get("needs_input")))
+                return launch_summary
+            messages.append({"role": "system", "content": "Первый шаг (запуск программы) принят Windows. "
+                             "Продолжай остальные действия поручения. Повторный запуск не нужен."})
         if outcomes.media and outcomes.login_required:
             answer = 'Воспроизведение пока не запущено. '+outcomes.last_error
             messages.append({'role':'assistant','content':answer})
