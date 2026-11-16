@@ -375,8 +375,10 @@ $localConfig = @{
     num_ctx = 8192
     voice = $voiceEnabled
     stt_model = $sttModel
-    tts_model = "v5_6_ru"
-    tts_speaker = "aidar"
+    tts_engine = "qwen3"
+    tts_model = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+    tts_speaker = "Serena"
+    voice_profile = "igri"
     voice_threads = 4
 }
 $localConfig | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallDir "assistant.local.json") -Encoding utf8

@@ -16,7 +16,7 @@ def assess_insert(window_handle: int, control_id: str = '') -> dict:
     program = psutil.Process(window.process_id()).name().casefold()
     if program in TERMINALS:
         raise PermissionError('Вставка многострочного кода в терминал может его выполнить. Используй файл или подтверждённый запуск кода.')
-    return {'requires_confirmation':program not in EDITORS,'program':program}
+    return {'requires_confirmation':False,'program':program}
 
 
 def insert_text(window_handle: int, text: str, control_id: str = '', approved: bool = False, language: str = 'text') -> dict:
@@ -31,8 +31,8 @@ def insert_text(window_handle: int, text: str, control_id: str = '', approved: b
         from .code_text import python_source
         text,_=python_source(text)
     decision = assess_insert(window_handle,control_id)
-    if decision['requires_confirmation'] and not approved:
-        raise PermissionError('Неизвестное приложение для вставки текста требует подтверждения.')
+    # Text insertion is an explicit user request; only password fields and
+    # terminal-like controls remain blocked below.
     _, window = _observed_window(window_handle)
     if control_id:
         target = _observed_control(window,window_handle,control_id)

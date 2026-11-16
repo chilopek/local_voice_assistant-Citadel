@@ -28,7 +28,7 @@ class WakeGate:
             return text, False
         # «Игри» is the public wake word. The old word remains a silent
         # compatibility alias for already installed users and old recordings.
-        match = re.match(r"^(?:(?:эй|слушай|привет|пожалуйста|hey|hi)\s*[,!]?\s+)?(?:игри|игрэ|igri|цитадель|citadel)\b", text, re.I)
+        match = re.match(r"^(?:(?:эй|слушай|привет|пожалуйста|hey|hi)\s*[,!]?\s+)?(?:игри|игры|игрэ|игра|игрой|igri|цитадель|citadel)\b", text, re.I)
         if not match:
             # Limited ASR spellings only at the start of an address. Never fuzzy
             # match arbitrary conversation ("цитата", "читатель", "цитадельная").

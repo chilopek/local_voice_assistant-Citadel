@@ -88,7 +88,7 @@ class Outcomes:
         return (["создание файла через write_file" + (' в '+str(self.workspace) if self.requested_root else '')] if self.file and not self.saved else []) + \
                (["проверенная правка существующего файла"] if self.edit and not self.edited else []) + \
                (["вставка текста в наблюдённый редактор через insert_text"] if self.editor and not self.inserted else []) + \
-               (["подтверждение воспроизведения музыки/видео"] if self.media and not self.playing else [])
+               (["запущенное воспроизведение музыки/видео"] if self.media and not self.playing else [])
 
     def code_to_file(self,answer):
         if not self.file or self.saved or self.editor or re.search(r'измен[иь]|отредактир|перепиши|existing|edit',self.text,re.I):

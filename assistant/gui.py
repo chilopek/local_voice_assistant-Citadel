@@ -243,7 +243,7 @@ class AssistantGUI:
                   style="Muted.TLabel", wraplength=650).pack(anchor="w", pady=(4, 0))
 
     def _welcome(self) -> None:
-        self._append_message("Игри", "Опишите задачу обычными словами. Я помогу с браузером, файлами и приложениями Windows.\n\nДействия, требующие разрешения, появятся в окне подтверждения.")
+        self._append_message("Игри", "Ну что, я на связи. Говори обычными словами — разберусь с браузером, файлами и приложениями Windows. Подтверждение появится только перед удалением важного файла.")
         self._log_activity("Готов к работе", "Здесь появятся шаги и результаты инструментов.")
 
     def _start_hotkey(self) -> None:
@@ -935,8 +935,8 @@ class AssistantGUI:
         ttk.Label(voice_settings,textvariable=self.voice_setup_var,wraplength=650).pack(anchor='w',pady=12)
         ttk.Label(voice_settings,text='По умолчанию: до 120 секунд, пауза до 1,2 секунды.\nДля особенно длинной диктовки можно увеличить voice_silence_seconds в настройках.',wraplength=650).pack(anchor='w')
         ttk.Label(voice_settings,text='Голос ответов',wraplength=650).pack(anchor='w',pady=(12,4))
-        profiles = {"Игри — Бая": "igri", "Ксения": "xenia", "Евгений": "jarvis", "Айдар": "neutral", "Бая": "baya"}
-        profile = tk.StringVar(value={"xenia":"Игри — Бая", "eugene":"Евгений", "aidar":"Айдар", "baya":"Игри — Бая"}.get(saved_speaker,"Игри — Бая"))
+        profiles = {"Игри — Serena (Qwen3, естественный голос)": "igri", "Ксения (Silero)": "xenia", "Евгений (Silero)": "jarvis", "Айдар (Silero)": "neutral", "Бая (Silero)": "baya"}
+        profile = tk.StringVar(value={"Serena":"Игри — Serena (Qwen3, естественный голос)", "xenia":"Ксения (Silero)", "eugene":"Евгений (Silero)", "aidar":"Айдар (Silero)", "baya":"Бая (Silero)"}.get(saved_speaker,"Игри — Serena (Qwen3, естественный голос)"))
         ttk.Combobox(voice_settings,textvariable=profile,values=tuple(profiles),state='readonly').pack(anchor='w')
         def prepare_voice():
             if self._voice_setup and not self._voice_setup.stopped.is_set() and (self._voice_setup.process is None or self._voice_setup.process.poll() is None):

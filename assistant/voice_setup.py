@@ -6,7 +6,7 @@ import tempfile
 
 from .paths import DATA_ROOT
 
-VOICE_PROFILES = {"igri": "baya", "xenia": "xenia", "jarvis": "eugene", "neutral": "aidar", "baya": "baya"}
+VOICE_PROFILES = {"igri": "Serena", "xenia": "xenia", "jarvis": "eugene", "neutral": "aidar", "baya": "baya"}
 
 
 def save_updates(updates):
@@ -29,6 +29,23 @@ def prepare_profile(profile,emit):
     from .voice import VoiceSession
     from .voice_assets import _validate_audio
     speaker = VOICE_PROFILES[profile]
+    if profile == "igri":
+        from .qwen_voice import DEFAULT_MODEL
+        emit('status', {'message': f'Подготовка Qwen3-TTS · {speaker}.'})
+        session = VoiceSession(tts_engine='qwen3', tts_model=DEFAULT_MODEL,
+                               tts_speaker=speaker, allow_download=True,
+                               allow_sapi_fallback=False,
+                               on_status=lambda message: emit('status', {'message': message}))
+        model, torch = session._load_tts()
+        speaker, rate = session._tts_settings(model)
+        with torch.inference_mode():
+            audio = model.apply_tts(text='Принято. Напоминание установлено.',
+                                    speaker=speaker, sample_rate=rate)
+        _validate_audio(audio, 'Qwen3-TTS voice profile')
+        save_updates({'tts_engine': 'qwen3', 'tts_model': DEFAULT_MODEL,
+                      'tts_speaker': speaker, 'voice_profile': profile})
+        emit('ready', {'message': f'Голос {speaker} проверен и сохранён.', 'reload_voice': True})
+        return
     emit('status',{'message':f'Подготовка голоса Silero · {speaker}.'})
     session = VoiceSession(tts_engine='silero',tts_speaker=speaker,allow_download=True,allow_sapi_fallback=False,
                            on_status=lambda message:emit('status',{'message':message}))

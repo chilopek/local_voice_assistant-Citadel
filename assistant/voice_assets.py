@@ -250,6 +250,22 @@ def _prepare_silero_assets(stt_model: str, tts_model: str, speaker: str,
     _validate_audio(audio, "Silero")
 
 
+def _prepare_qwen_assets(tts_model: str, speaker: str, rate: int,
+                         allow_download: bool,
+                         on_status: Callable[[str], None] | None) -> None:
+    from .voice import VoiceSession
+    session = VoiceSession(on_status=lambda message: _status(on_status, "qwen3", message),
+                           allow_download=allow_download, tts_engine="qwen3",
+                           tts_model=tts_model, tts_speaker=speaker)
+    model, torch = session._load_tts()
+    speaker, rate = session._tts_settings(model)
+    _status(on_status, "synthesis", f"Validating Qwen3-TTS synthesis ({speaker}, {rate} Hz)")
+    with torch.inference_mode():
+        audio = model.apply_tts(text="Проверка естественного голоса.",
+                                speaker=speaker, sample_rate=rate)
+    _validate_audio(audio, "Qwen3-TTS")
+
+
 def prepare_voice_assets(config: Mapping[str, Any],
                          on_status: Callable[[str], None] | None = None, *,
                          allow_download: bool = True) -> None:
@@ -298,9 +314,13 @@ def prepare_voice_assets(config: Mapping[str, Any],
         del stt
 
         engine = str(config.get("tts_engine", "silero")).lower()
-        if engine not in {"silero", "piper"}:
+        if engine not in {"silero", "piper", "qwen3"}:
             raise ValueError(f"Unknown configured TTS engine: {engine}")
-        if engine == "silero":
+        if engine == "qwen3":
+            stage = f"Qwen3-TTS ({tts_model}, speaker={speaker})"
+            status("tts", f"Preparing {tts_model}, speaker={speaker}")
+            _prepare_qwen_assets(tts_model, speaker, rate, allow_download, on_status)
+        elif engine == "silero":
             stage = f"Silero TTS (ru/{tts_model}, speaker={speaker})"
             status("tts", f"Preparing ru/{tts_model}, speaker={speaker}")
             try:

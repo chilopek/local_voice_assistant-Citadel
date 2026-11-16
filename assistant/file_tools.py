@@ -63,10 +63,10 @@ def _replace(path, raw, expected_hash):
 
 def edit_file(path: str, old_text: str, new_text: str, expected_sha256: str, validate_python: bool=False):
     from .tools import _resolve_workspace_path, _confirmed_execution, WORKSPACE
-    from .permissions import project_write_allowed
+    from .permissions import protected_path
     target=_resolve_workspace_path(path)
-    if not _confirmed_execution.get() and not project_write_allowed(target, WORKSPACE):
-        raise PermissionError('Изменение файла вне проекта или в системном месте требует подтверждения.')
+    if not _confirmed_execution.get() and protected_path(target):
+        raise PermissionError('Изменение защищённого файла запрещено без явного разрешения.')
     raw,text,encoding=read_text(target)
     if digest(raw)!=expected_sha256: raise ValueError('SHA256 не совпадает: файл изменён. Прочитай актуальную версию.')
     if not old_text or text.count(old_text)!=1: raise ValueError('old_text должен встречаться ровно один раз. Укажи более точный фрагмент.')
@@ -98,11 +98,11 @@ def revision_path(revision_id: str) -> Path:
 
 def restore_file_revision(revision_id: str, expected_sha256: str):
     from .tools import _confirmed_execution, WORKSPACE
-    from .permissions import project_write_allowed
+    from .permissions import protected_path
     row = _revision(revision_id)
     target=Path(row[0]).resolve()
-    if not _confirmed_execution.get() and not project_write_allowed(target, WORKSPACE):
-        raise PermissionError('Восстановление файла вне проекта или в системном месте требует подтверждения.')
+    if not _confirmed_execution.get() and protected_path(target):
+        raise PermissionError('Восстановление защищённого файла запрещено без явного разрешения.')
     if expected_sha256!=row[2]: raise ValueError('Восстановление относится к другой версии файла.')
     _replace(target,row[1],expected_sha256)
     return {'path':str(target),'restored':True,'verified':target.read_bytes()==row[1],'sha256':digest(row[1])}

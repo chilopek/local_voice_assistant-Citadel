@@ -128,7 +128,7 @@ class VoiceSession:
         self._stt: Any | None = None
         self._tts: Any | None = None
         self._torch: Any | None = None
-        self._tts_key: tuple[str, str] | None = None
+        self._tts_key: tuple[Any, ...] | None = None
         self._on_status = on_status
         self._allow_sapi_fallback = allow_sapi_fallback
         self.allow_download = allow_download
@@ -209,6 +209,19 @@ class VoiceSession:
             raise _failure("Whisper не готов. Повторите установку с подготовкой голоса", error) from error
 
     def _load_tts(self) -> tuple[Any, Any]:
+        if self.tts_engine == "qwen3":
+            from .qwen_voice import Qwen3Voice, DEFAULT_MODEL, DEFAULT_SPEAKER
+            key = ("qwen3", self.tts_model or DEFAULT_MODEL, self.tts_speaker or DEFAULT_SPEAKER)
+            if self._tts is not None and self._torch is not None and self._tts_key == key:
+                return self._tts, self._torch
+            self._status("Подготовка Qwen3-TTS из локальных файлов…")
+            try:
+                backend = Qwen3Voice.load(key[1], key[2], allow_download=self.allow_download)
+                self._tts, self._torch, self._tts_key = backend, backend.torch, key
+                self._status(f"Qwen3-TTS готов: {backend.speaker}")
+                return backend, backend.torch
+            except Exception as error:
+                raise _failure("Не удалось загрузить Qwen3-TTS", error) from error
         if self.tts_engine == "piper":
             try:
                 from .piper_voice import PiperBackend, get_piper_path
@@ -405,12 +418,16 @@ class VoiceSession:
             if stop_event is not None and stop_event.is_set():
                 return None
             language = self.stt_language if self.stt_language in {"ru", "en"} else None
-            segments, _ = model.transcribe(samples, language=language, beam_size=VOICE_BEAM_SIZE,
+            segments, _ = model.transcribe(samples, language=language, beam_size=max(3, VOICE_BEAM_SIZE),
                                            temperature=0, vad_filter=True,
                                            vad_parameters={"min_silence_duration_ms": 600, "speech_pad_ms": 400},
                                            multilingual=language is None,
-                                           condition_on_previous_text=language is not None,
-                                           hotwords="Игри, Игрэ, Цитадель, Citadel, Valorant, Discord, Steam, YouTube")
+                                           condition_on_previous_text=False,
+                                           initial_prompt=("Игри. Открой, запусти, найди, включи, выключи, "
+                                                           "прочитай, сохрани, создай, погода, курс доллара. "
+                                                           "Igri, open, search, play, close, save, create."),
+                                           hotwords=("Игри, Игры, Игрэ, Игра, Цитадель, Citadel, "
+                                                     "Valorant, Discord, Steam, YouTube, Google, Chrome"))
             parts = []
             for segment in segments:
                 if stop_event is not None and stop_event.is_set():

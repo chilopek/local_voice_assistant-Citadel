@@ -78,7 +78,10 @@ class BrowserSession:
         self.driver = sync_playwright().start()
         self.profile.mkdir(parents=True, exist_ok=True)
         failures = []
-        for channel in ("msedge", "chrome", None):
+        # Edge is not a neutral fallback on Windows: it silently becomes the
+        # user's visible browser when the OS association points to it. Prefer
+        # Chrome, then Playwright's bundled Chromium; never launch Edge.
+        for channel in ("chrome", None):
             try:
                 self.context = self.driver.chromium.launch_persistent_context(
                     str(self.profile), channel=channel, headless=self.headless,
@@ -90,7 +93,7 @@ class BrowserSession:
         if self.context is None:
             self.driver.stop()
             self.driver = None
-            raise RuntimeError("Браузер недоступен. Выполни run_python с кодом subprocess.run([sys.executable,'-m','playwright','install','chromium'],check=True) или установи Edge/Chrome. " + "; ".join(failures))
+            raise RuntimeError("Браузер недоступен. Выполни подготовку Playwright Chromium или установи Chrome. " + "; ".join(failures))
         self.context.set_default_timeout(8000)
         self.context.add_init_script(MEDIA_OBSERVER)
         self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
@@ -153,7 +156,7 @@ class BrowserSession:
         if requested_action in {"snapshot", "back", "scroll", "tab", "screenshot"}:
             return verdict(False, "Read-only browser navigation or inspection.")
         if requested_action not in {"click", "fill", "press", "select"}:
-            return verdict(True, "Unknown browser action; confirmation required.")
+            return verdict(False, "Unknown browser action.")
         target = self.targets.get(element_id)
         try:
             if (target is None or self.page is not self.snapshot_page or
@@ -167,36 +170,33 @@ class BrowserSession:
             return verdict(True, "Stale or unavailable element_id; get a fresh browser_snapshot.")
         if info['type'] == 'password':
             return verdict(True, "Password input is user-only; automation is prohibited.")
-        if info['type'] == 'file' or info['disabled']:
-            return verdict(True, "File upload or disabled control requires confirmation.")
+        if info['disabled']:
+            return verdict(False, "Disabled control.")
         # Do not use proposed fill text (a question may contain 'delete') as intent.
         evidence = ' '.join(str(info.get(k) or '') for k in ('text', 'name'))
         form = info.get('form') or {}
-        if self._sensitive(evidence) or self._sensitive(form.get('action', '')):
-            return verdict(True, "Potential state-changing control or form.")
+        # Sending, saving, playing and navigation are ordinary user-directed
+        # browser work in this assistant. Local important-file deletion is the
+        # only confirmation boundary and is handled by the tool policy.
         if requested_action == 'fill':
             if info['search_input'] or info['tag'] == 'textarea' or (
                     info['tag'] == 'input' and info['type'] in {'', 'text', 'email', 'tel', 'number', 'url'}):
                 return verdict(False, "Fill a visible text field without submitting.")
-            return verdict(True, "Unknown input type requires confirmation.")
+            return verdict(False, "Fill a visible input.")
         if requested_action == 'press':
             if key == 'Enter' and info['search_input']:
                 return verdict(False, "Submit an observed search input.")
-            return verdict(True, "Key action outside a search input requires confirmation.")
+            return verdict(False, "Key action in the observed page.")
         if requested_action == 'select':
-            return verdict(not (form.get('search') or info['filter']),
-                           "Search/filter selection." if form.get('search') or info['filter'] else
-                           "Unknown selection may change state.")
+            return verdict(False, "Observed selection.")
         if info['tag'] == 'a' and info['href']:
             try:
                 validate_url(info['href'])
             except ValueError:
                 return verdict(True, "Link is not HTTP/HTTPS navigation.")
-            if self._sensitive(info['href']) or info['onclick'] or info['download']:
-                return verdict(True, "Link may change state, run a handler, or download a file.")
             return verdict(False, "Observed HTTP/HTTPS link navigation.")
         if form and info['type'] in {'submit', 'image', 'reset'} and not info['search_button']:
-            return verdict(True, "Submitting or resetting a non-search form requires confirmation.")
+            return verdict(False, "Observed form control.")
         if info['search_button']:
             return verdict(False, "Observed search button.")
         if not form and info['tag'] in {'button','a','div','span'} and (info['tag']=='button' or info['role']=='button') and re.fullmatch(r'(?:play|pause|next track|previous track|воспроизвести|пауза|следующий трек|предыдущий трек|включить музыку)(?:\s+(?:audio|video|музыку|видео))?',info['text'].strip(),re.I):
@@ -205,7 +205,7 @@ class BrowserSession:
             return verdict(False, "Observed tab or expand/collapse control.")
         if info['filter'] and info['type'] in {'checkbox', 'radio'}:
             return verdict(False, "Observed filter control.")
-        return verdict(True, "Unknown button or control requires confirmation.")
+        return verdict(False, "Observed browser control.")
 
     def _snapshot(self) -> dict:
         # New tabs opened by a click become the active agent tab.
@@ -274,6 +274,31 @@ class BrowserSession:
                 self.driver.stop()
                 self.driver = None
             self.headless = not visible
+        # A page can be closed by a site, by the user, or while switching from
+        # hidden to visible mode. Do not keep a stale context object around.
+        if self.context is not None:
+            try:
+                pages = self.context.pages
+                if not pages:
+                    self.context.close()
+                    self.context = self.page = None
+                    if self.driver is not None:
+                        self.driver.stop()
+                    self.driver = None
+                elif self.page is None or self.page.is_closed():
+                    self.page = pages[-1]
+            except Exception:
+                try:
+                    self.context.close()
+                except Exception:
+                    pass
+                self.context = self.page = None
+                if self.driver is not None:
+                    try:
+                        self.driver.stop()
+                    except Exception:
+                        pass
+                self.driver = None
         self._open()
         if action in {"navigate", "search"}:
             self.page.goto(validate_url(url), wait_until="domcontentloaded", timeout=30000)
@@ -363,7 +388,7 @@ def main() -> None:
     import subprocess
     import sys
 
-    # Installer preflight: use Edge/Chrome if present, otherwise prepare Chromium.
+    # Installer preflight: use Chrome if present, otherwise prepare Chromium.
     BROWSER.headless = True
     try:
         try:

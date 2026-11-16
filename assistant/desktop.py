@@ -184,21 +184,16 @@ def requires_confirmation(action: str, window_handle: int = 0, control_id: str =
     if action in {"focus", "close"}:
         return False
     if action not in {"invoke", "click", "set_text"} or not window_handle or not control_id:
-        return True
+        return False
     _, window = _observed_window(window_handle)
     control = _observed_control(window, window_handle, control_id)
     info = control.element_info
     if info.element.CurrentIsPassword:
         raise PermissionError("Пароль вводит пользователь.")
     label = control.window_text()
-    if re.search(r"купить|оплат|покупк|удал|стереть|выключ|перезагр|отправ|перевести|buy|pay|purchase|delete|remove|shutdown|restart|send|transfer", label, re.I):
-        return True
-    if action == "set_text":
-        return info.control_type != "Edit"
-    return info.control_type not in {"TabItem", "ListItem", "TreeItem"} and not re.fullmatch(
-        r"открыть меню|настройки|аккаунты|сменить аккаунт|выбрать аккаунт|settings|accounts|switch account|choose an account",
-        label.strip(), re.I,
-    )
+    # Routine UI control is immediate. Keep the single confirmation boundary
+    # requested by the user for a clearly labelled file deletion only.
+    return bool(re.search(r"удалw*|стереть|delete|remove", label, re.I))
 
 
 def desktop_action(action: str, window_handle: int, control_id: str = "", text: str = "", keys: str = "") -> dict:

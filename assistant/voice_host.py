@@ -142,8 +142,9 @@ class ResidentVoice:
         if hasattr(self.voice, "warmup"):
             self.voice.warmup(speech=speech)
         self.emit("ready", {"speech": speech, "stt_instance": id(getattr(self.voice, "_stt", None)),
-                            "voice": ("Piper · irina" if getattr(self.voice, "tts_engine", "") == "piper"
-                                      else "Silero · " + getattr(self.voice, "tts_speaker", "")) if speech else "",
+                            "voice": (("Qwen3-TTS · " if getattr(self.voice, "tts_engine", "") == "qwen3" else
+                                       "Piper · " if getattr(self.voice, "tts_engine", "") == "piper" else
+                                       "Silero · ") + getattr(self.voice, "tts_speaker", "")) if speech else "",
                             "tts_instance": id(getattr(self.voice, "_tts", None))})
 
     def run(self, speech: bool, *, prepared: bool = False) -> None:
