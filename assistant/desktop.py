@@ -90,6 +90,26 @@ def foreground_window() -> tuple[int, int] | None:
     return None
 
 
+def foreground_context() -> dict:
+    """Return a small local observation for the companion context layer."""
+    current = foreground_window()
+    if not current or sys.platform != "win32":
+        return {}
+    handle, pid = current
+    try:
+        import win32gui
+        import psutil
+        return {
+            "window_title": win32gui.GetWindowText(handle)[:240],
+            "process": psutil.Process(pid).name(),
+            "window_handle": handle,
+            "pid": pid,
+            "source": "foreground window",
+        }
+    except Exception:
+        return {"window_handle": handle, "pid": pid, "source": "foreground window"}
+
+
 def _close_observed(window_handle: int, title: str, pid: int) -> dict:
     import win32con
     import win32gui

@@ -69,6 +69,7 @@ class AssistantGUI:
         self._voice_setup = None
         self._previous_window = None
         self._voice_reload_pending = False
+        self._activity_context: dict[str, Any] = {}
         self.voice_setup_var = tk.StringVar(value='Выбор модели применяется после перезапуска приложения.')
         self._session_id: str | None = None
         self.hotkey_listener: Any | None = None
@@ -352,7 +353,8 @@ class AssistantGUI:
     def _start_process(self, mode: str, text: str = "") -> None:
         self._agent_running = True
         payload = {"mode": mode, "text": text, "messages": self.messages, "speak": False,
-                   "previous_window": self._previous_window}
+                   "previous_window": self._previous_window,
+                   "activity_context": dict(self._activity_context)}
         if self.history and self._chat_id:
             import re
             continuation = bool(re.fullmatch(r'\s*(?:продолжи|продолжай|continue|resume)[.!\s]*', text, re.I))
@@ -624,10 +626,12 @@ class AssistantGUI:
 
     def _drain_events(self) -> None:
         import os
-        from .desktop import foreground_window
-        active = foreground_window()
+        from .desktop import foreground_context
+        context = foreground_context()
+        active = (context.get("window_handle"), context.get("pid")) if context.get("window_handle") and context.get("pid") else None
         if active and active[1] != os.getpid():
             self._previous_window = active
+            self._activity_context = context
         if self.closed.is_set():
             return
         if self._pending_confirmation and self.cancel_event.is_set():

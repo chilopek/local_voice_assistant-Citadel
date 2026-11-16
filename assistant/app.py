@@ -21,6 +21,7 @@ from .speech import reminder_text, outcome_speech
 from .outcomes import wants_file,wants_editor,wants_edit
 from .application_catalog import AmbiguousApplication, resolve_application
 from .system_tools import describe_status, is_status_request, power_request
+from .companion import build_companion_context
 
 
 SYSTEM_PROMPT = """Ты — Цитадель, локальный агент пользователя на Windows. Отвечай по-русски.
@@ -165,6 +166,8 @@ def _conversation_only(text: str) -> bool:
 def _task_tools(text: str, messages: list[dict] | None = None) -> tuple[bool, set[str]]:
     """Route by requested operation, never by the subject being researched."""
     text = text.lower()
+    if re.search(r"смотрим\s+вместе|посмотри\s+со\s+мной|комментируй|прокомментируй|что\s+я\s+смотрю|what\s+am\s+i\s+watching", text):
+        return False, {"desktop", "browser"}
     if _conversation_only(text):
         return False, set()
     from .outcomes import wants_file,wants_editor,wants_media
@@ -390,6 +393,7 @@ def run_turn(
     goal_text: str | None = None,
     resume_receipts: list[dict] | None = None,
     previous_window: tuple[int, int] | None = None,
+    activity_context: dict[str, Any] | None = None,
 ) -> str:
     task_id = str(time.time_ns())
     prior_context = conversation_context(messages)
@@ -486,7 +490,8 @@ def run_turn(
                   "Открой меню аккаунтов и выбери наблюдаемую запись через desktop_action с action=invoke. "
                   "Номер считай в видимом списке аккаунтов. Если выбор неясен, уточни. "
                   "Сверь результат по новому снимку. Если требуется пароль, код или ручной вход, используй ask_user и дождись пользователя.")
-    context = base_prompt + '\n' + guide + f"\nСейчас: {dt.datetime.now().astimezone().isoformat()}. Рабочая папка: {WORKSPACE}.\n" + memory.prompt_context()
+    companion = build_companion_context(activity_context, user_text)
+    context = base_prompt + '\n' + guide + '\n' + companion + f"\nСейчас: {dt.datetime.now().astimezone().isoformat()}. Рабочая папка: {WORKSPACE}.\n" + memory.prompt_context()
     if goal_text:
         context+='\nНезавершённое поручение и уточнения пользователя (данные текущей задачи):\n'+goal_text[-12000:]+'\nПродолжи его, используя историю уже выполненных действий. Не повторяй подтверждённую запись/отправку без необходимости.'
     if known_route:
