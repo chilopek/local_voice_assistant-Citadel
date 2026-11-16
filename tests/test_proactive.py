@@ -23,3 +23,14 @@ class ProactiveTests(unittest.TestCase):
             self.assertIsNone(self.sample(policy,0,free_bytes=1,**flags))
             self.assertIn('2 ГБ',self.sample(policy,10,free_bytes=1))
             self.assertIsNone(self.sample(policy,20,free_bytes=1))
+
+    def test_companion_comments_on_new_video_activity(self):
+        policy = SuggestionPolicy()
+        text = self.sample(policy, 1000, observation={"window_title": "YouTube — обзор SSH", "process": "msedge.exe"})
+        self.assertIn("Смотрим вместе", text)
+
+    def test_companion_does_not_repeat_same_activity(self):
+        policy = SuggestionPolicy()
+        observation = {"window_title": "Spotify", "process": "Spotify.exe"}
+        self.assertIsNotNone(self.sample(policy, 1000, observation=observation))
+        self.assertIsNone(self.sample(policy, 1050, observation=observation))

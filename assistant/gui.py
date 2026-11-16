@@ -46,7 +46,7 @@ class AssistantGUI:
         self._chat_id = None
         self._turn_id = None
         self.suggestions_enabled = threading.Event()
-        if self.history and self.history.setting('suggestions',False): self.suggestions_enabled.set()
+        if self.history and self.history.setting('suggestions',True): self.suggestions_enabled.set()
         self.proactive = None
         self.stop_event: threading.Event | None = None
         self.cancel_event = threading.Event()
@@ -818,8 +818,8 @@ class AssistantGUI:
             if suggestions.get(): self.suggestions_enabled.set()
             else: self.suggestions_enabled.clear()
             if self.history: self.history.set_setting('suggestions',suggestions.get())
-        ttk.Checkbutton(reminders,text='Ненавязчивые подсказки: перерыв и мало места на диске',variable=suggestions,command=change_suggestions).pack(anchor='w')
-        ttk.Label(reminders,text='Без опроса модели. Подсказки молчат ночью, при бездействии, во время задачи и полноэкранного приложения.',wraplength=650).pack(anchor='w',pady=(0,8))
+        ttk.Checkbutton(reminders,text='Игри может сама реагировать на активность',variable=suggestions,command=change_suggestions).pack(anchor='w')
+        ttk.Label(reminders,text='Локально видит активное окно и процесс. Может отреагировать на видео, музыку, игру, код, перерыв или нехватку места. Не опрашивает модель и молчит ночью, при бездействии, во время задачи и в полноэкранном режиме.',wraplength=650).pack(anchor='w',pady=(0,8))
         from .procedures import Procedures
         procedures = Procedures(self.memory.path.with_name('procedures.sqlite3'))
         learned = ttk.Frame(notebook, padding=12)

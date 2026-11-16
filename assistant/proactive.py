@@ -6,19 +6,38 @@ import sys
 import threading
 import time
 
+from .companion import infer_activity
+
 
 class SuggestionPolicy:
     def __init__(self):
         self.active_since=None
         self.last={}
+        self.last_activity=None
 
-    def poll(self, *, now, hour, idle_seconds, free_bytes, fullscreen=False, busy=False):
+    def poll(self, *, now, hour, idle_seconds, free_bytes, fullscreen=False, busy=False, observation=None):
         if idle_seconds>=300:
             self.active_since=None
         elif self.active_since is None:
             self.active_since=now
         if busy or fullscreen or hour<8 or hour>=22 or idle_seconds>=300:
             return None
+        if observation:
+            activity = infer_activity(observation)
+            title = str(observation.get('window_title') or '').strip()
+            key = (activity.kind, title[:120])
+            if key != self.last_activity:
+                self.last_activity = key
+                if activity.kind in {'video', 'music', 'game', 'coding'} and now-self.last.get('activity',-1e12)>=120:
+                    self.last['activity'] = now
+                    clean_title = ' '.join(title.split())[:100].strip(' —-')
+                    if activity.kind == 'video':
+                        return f'О, ты открыл «{clean_title or "видео"}». Смотрим вместе? Я рядом.'
+                    if activity.kind == 'music':
+                        return 'Музыка пошла. Неплохой фон — я пока не буду изображать диджея.'
+                    if activity.kind == 'game':
+                        return 'Вижу, началась игровая сессия. Не мешаю; если что, могу посмотреть нагрузку системы.'
+                    return 'Открыт редактор. Я рядом: если застрянешь, просто скажи «разберись с этим».'
         if free_bytes<2*1024**3 and now-self.last.get('disk',-1e12)>=6*3600:
             self.last['disk']=now
             return 'На диске с файлами Цитадели осталось меньше 2 ГБ. Могу показать, что занимает место.'
@@ -64,8 +83,14 @@ class ProactiveMonitor:
                 continue
             try:
                 idle,fullscreen=desktop_activity()
+                try:
+                    from .desktop import foreground_context
+                    observation = foreground_context()
+                except Exception:
+                    observation = None
                 text=self.policy.poll(now=time.monotonic(),hour=dt.datetime.now().hour,idle_seconds=idle,
-                                      free_bytes=shutil.disk_usage(self.path).free,fullscreen=fullscreen,busy=self.busy())
+                                      free_bytes=shutil.disk_usage(self.path).free,fullscreen=fullscreen,busy=self.busy(),
+                                      observation=observation)
                 if text:self.emit(text)
             except OSError:
                 pass
