@@ -362,6 +362,7 @@ def _ask_confirmation(name: str, arguments: dict[str, Any]) -> bool:
 
 def _clean_answer(content: str) -> str:
     """Убирает reasoning-текст, который старые версии Ollama могут вернуть в content."""
+    original = content or ""
     if "</think>" in content:
         content = content.rsplit("</think>", 1)[1]
     if "<think>" in content and "</think>" not in content:
@@ -373,7 +374,15 @@ def _clean_answer(content: str) -> str:
     content = re.sub(r"(?is)\bя\s+(?:ваш|ваша)\s+локальн\w*\s+агент\w*[^.!?]*[.!?]\s*", "", content)
     content = re.sub(r"(?is)\bя\s+здесь,?\s+чтобы\s+помочь\s+вам\s+напрямую\s*[.!?]?\s*", "", content)
     content = re.sub(r"(?is)\bчем\s+могу\s+(?:быть|вам)\s+полезн\w*\s*\??\s*$", "", content).strip()
-    return content or "Я рядом. Говори, что у тебя случилось."
+    # Keep an actually empty model response empty: the caller can then expose
+    # verified tool observations/errors instead of replacing them with a chat
+    # filler. Use the friendly fallback only when the model returned nothing
+    # except the banned identity-card boilerplate.
+    if content:
+        return content
+    if re.search(r"(?is)я\s*[—-]\s*игри|локальн\w*\s+агент|чем\s+могу\s+.*полезн", original):
+        return "Я рядом. Говори, что у тебя случилось."
+    return ""
 
 
 def _answer_page_request(text: str) -> bool:
