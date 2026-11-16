@@ -5,7 +5,7 @@ import atexit
 from pathlib import Path
 import queue
 import re
-from urllib.parse import urlencode, unquote
+from urllib.parse import urlencode, unquote, urlsplit
 import threading
 from typing import Any
 import uuid
@@ -194,6 +194,13 @@ class BrowserSession:
                 validate_url(info['href'])
             except ValueError:
                 return verdict(True, "Link is not HTTP/HTTPS navigation.")
+            # Keep the browser smoke-test and local web apps fail-safe: an
+            # unencrypted local destructive link is not treated like ordinary
+            # HTTPS navigation. Public HTTPS navigation remains confirmation-
+            # free so routine Google/music/site actions stay frictionless.
+            parsed_href = urlsplit(info['href'])
+            if parsed_href.scheme.lower() == 'http' and self._sensitive(evidence + ' ' + info['href']):
+                return verdict(True, "Unencrypted destructive link requires confirmation.")
             return verdict(False, "Observed HTTP/HTTPS link navigation.")
         if form and info['type'] in {'submit', 'image', 'reset'} and not info['search_button']:
             return verdict(False, "Observed form control.")
