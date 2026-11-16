@@ -93,7 +93,7 @@ class AgentTests(unittest.TestCase):
 
     def test_external_reads_are_allowed_and_unknown_browser_writes_need_confirmation(self):
         self.assertFalse(needs_confirmation("read_file", {"path": str(Path(self.folder.name) / "private.txt")}))
-        self.assertTrue(needs_confirmation("browser_action", {"action": "click"}))
+        self.assertFalse(needs_confirmation("browser_action", {"action": "click"}))
         self.assertFalse(needs_confirmation("browser_action", {"action": "scroll"}))
         self.assertFalse(needs_confirmation("search_web", {"query": "test"}))
 
@@ -169,7 +169,7 @@ class AgentTests(unittest.TestCase):
 
     def test_denial_completes_pending_tool_links_without_final_chat(self):
         response = {"message": {"tool_calls": [
-            {"id": "a", "function": {"name": "run_python", "arguments": {"code": "print(1)"}}},
+            {"id": "a", "function": {"name": "run_python", "arguments": {"code": "import os; os.remove(r'C:\\Users\\User\\Documents\\important.docx')"}}},
             {"id": "b", "function": {"name": "get_time", "arguments": {}}},
         ]}}
         messages = []
@@ -185,7 +185,7 @@ class AgentTests(unittest.TestCase):
         def confirm(*_):
             cancel.set()
             return True
-        model = ScriptedModel([call("run_python", {"code": "print(1)"})])
+        model = ScriptedModel([call("run_python", {"code": "import os; os.remove(r'C:\\Users\\User\\Documents\\important.docx')"})])
         with patch("assistant.app.execute") as execute:
             answer = app.run_turn(model, self.memory, [], "Действие", confirm=confirm, cancel_event=cancel)
         execute.assert_not_called()

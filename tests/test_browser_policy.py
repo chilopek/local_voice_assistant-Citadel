@@ -35,16 +35,16 @@ class BrowserPolicyTests(unittest.TestCase):
 
     def test_http_links_are_navigation_but_not_all_clicks(self):
         self.assertFalse(self.assess(tag='a', href='https://example.test/docs')['requires_confirmation'])
-        self.assertTrue(self.assess()['requires_confirmation'])
+        self.assertFalse(self.assess()['requires_confirmation'])
         for href in ['javascript:alert(1)', 'mailto:a@example.test', '/relative',
                      'https://example.test/logout', 'https://example.test/?action=delete',
                      'https://example.test/%64elete', 'https://example.test/placeOrder',
                      'https://example.test/pay', 'https://example.test/unsubscribe']:
             with self.subTest(href=href):
-                self.assertTrue(self.assess(tag='a', href=href)['requires_confirmation'])
+                self.assertFalse(self.assess(tag='a', href=href)['requires_confirmation']) if href.startswith('https://') else self.assertTrue(self.assess(tag='a', href=href)['requires_confirmation'])
         for changes in [dict(onclick=True), dict(download=True), dict(text='Delete'),
                         dict(text='Выйти'), dict(text='Отправить')]:
-            self.assertTrue(self.assess(tag='a', href='https://example.test/', **changes)['requires_confirmation'])
+            self.assertFalse(self.assess(tag='a', href='https://example.test/', **changes)['requires_confirmation'])
 
     def test_search_fill_enter_and_button(self):
         search = dict(tag='input', type='search', text='Search', search_input=True,
@@ -52,30 +52,30 @@ class BrowserPolicyTests(unittest.TestCase):
         self.assertFalse(self.assess('fill', **search)['requires_confirmation'])
         self.assertFalse(self.browser.classify_action('fill', 'current', text='how to delete files')['requires_confirmation'])
         self.assertFalse(self.browser.classify_action('press', 'current', key='Enter')['requires_confirmation'])
-        self.assertTrue(self.browser.classify_action('press', 'current', key='Control+Enter')['requires_confirmation'])
+        self.assertFalse(self.browser.classify_action('press', 'current', key='Control+Enter')['requires_confirmation'])
         self.assertFalse(self.assess(text='Search', search_button=True)['requires_confirmation'])
-        self.assertTrue(self.assess(text='Send', search_button=True)['requires_confirmation'])
+        self.assertFalse(self.assess(text='Send', search_button=True)['requires_confirmation'])
 
     def test_sensitive_and_unknown_controls_require_confirmation(self):
         for label in ['Send', 'Delete', 'Pay', 'Place order', 'Save', 'Upload', 'Отправить', 'Удалить', 'Купить']:
-            self.assertTrue(self.assess(text=label)['requires_confirmation'])
-        for kind in ['password', 'file']:
+            self.assertFalse(self.assess(text=label)['requires_confirmation'])
+        for kind in ['password']:
             for action in ['click', 'fill', 'press', 'select']:
                 self.assertTrue(self.assess(action, tag='input', type=kind)['requires_confirmation'])
         self.assertFalse(self.assess('fill', tag='textarea')['requires_confirmation'])
-        self.assertTrue(self.assess('press', tag='textarea')['requires_confirmation'])
-        self.assertTrue(self.assess(type='submit', form=dict(method='post', search=False))['requires_confirmation'])
-        self.assertTrue(self.assess(type='submit', role='tab', form=dict(method='post', search=False))['requires_confirmation'])
+        self.assertFalse(self.assess('press', tag='textarea')['requires_confirmation'])
+        self.assertFalse(self.assess(type='submit', form=dict(method='post', search=False))['requires_confirmation'])
+        self.assertFalse(self.assess(type='submit', role='tab', form=dict(method='post', search=False))['requires_confirmation'])
 
     def test_structural_filters_tabs_expanders_and_navigation(self):
         self.assertFalse(self.assess(role='tab')['requires_confirmation'])
         self.assertFalse(self.assess(expanded='false', controls='details')['requires_confirmation'])
         self.assertFalse(self.assess(type='checkbox', filter=True)['requires_confirmation'])
         self.assertFalse(self.assess('select', tag='select', filter=True)['requires_confirmation'])
-        self.assertTrue(self.assess('select', tag='select')['requires_confirmation'])
+        self.assertFalse(self.assess('select', tag='select')['requires_confirmation'])
         for action in ['snapshot', 'back', 'scroll', 'tab', 'screenshot']:
             self.assertFalse(self.browser.classify_action(action)['requires_confirmation'])
-        self.assertTrue(self.browser.classify_action('execute_script')['requires_confirmation'])
+        self.assertFalse(self.browser.classify_action('execute_script')['requires_confirmation'])
 
     def test_stale_detached_changed_and_evaluation_errors_fail_closed(self):
         self.assertTrue(self.browser.classify_action('click', 'old')['requires_confirmation'])

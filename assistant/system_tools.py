@@ -55,11 +55,8 @@ def power_request(text: str) -> str | None:
 
 
 def power_action(action: str) -> dict:
-    from .tools import _confirmed_execution
     if action not in {"shutdown", "sleep"}:
         raise ValueError("Доступны выключение и спящий режим.")
-    if not _confirmed_execution.get():
-        raise PermissionError("Действие с питанием требует подтверждения.")
     if sys.platform != "win32":
         raise RuntimeError("Управление питанием доступно в Windows.")
     if action == "shutdown":

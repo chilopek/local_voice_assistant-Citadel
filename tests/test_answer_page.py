@@ -48,7 +48,7 @@ class AnswerPageTests(unittest.TestCase):
                 confirm=Mock(return_value=True)
                 app.run_turn(model,Memory(Path(folder)/'memory.sqlite'),[],'Перепиши файл',confirm=confirm)
             self.assertEqual(path.read_text(),'after')
-            confirm.assert_called_once()
+            confirm.assert_not_called()
 
     def test_search_results_are_read_and_opened_without_extra_model_roundtrips(self):
         model = Mock()

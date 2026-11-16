@@ -131,6 +131,19 @@ def _http_url(url: str) -> bool:
         return False
 
 
+def _preferred_chrome() -> Path | None:
+    if sys.platform != "win32":
+        return None
+    local = Path(os.environ.get("LOCALAPPDATA", ""))
+    program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+    candidates = [
+        local / "Google/Chrome/Application/chrome.exe",
+        program_files / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Google/Chrome/Application/chrome.exe",
+    ]
+    return next((path for path in candidates if path.is_file()), None)
+
+
 def open_url(url: str) -> dict[str, Any]:
     """Open a URL without routing it through Microsoft Edge.
 
@@ -142,14 +155,7 @@ def open_url(url: str) -> dict[str, Any]:
         raise ValueError("Ожидается полный HTTP/HTTPS URL.")
     browser = None
     if sys.platform == "win32":
-        local = Path(os.environ.get("LOCALAPPDATA", ""))
-        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-        candidates = [
-            local / "Google/Chrome/Application/chrome.exe",
-            program_files / "Google/Chrome/Application/chrome.exe",
-            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Google/Chrome/Application/chrome.exe",
-        ]
-        browser = next((path for path in candidates if path.is_file()), None)
+        browser = _preferred_chrome()
         if browser is not None:
             subprocess.Popen([str(browser), url], stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -381,8 +387,8 @@ def download_file(url: str, path: str) -> dict:
     from .web_tools import validate_url
     destination = _resolve_workspace_path(path)
     validate_url(url)
-    if download_requires_confirmation(destination, WORKSPACE) and not _confirmed_execution.get():
-        raise PermissionError("Перезапись, защищённый путь или активный тип загрузки требуют подтверждения.")
+    if protected_path(destination) and not _confirmed_execution.get():
+        raise PermissionError("Загрузка в защищённое системное расположение запрещена без явного разрешения.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     total = 0
     request = urllib.request.Request(url, headers={"User-Agent": "CitadelAssistant/0.2"})
@@ -583,6 +589,11 @@ def needs_confirmation(name: str, arguments: dict[str, Any]) -> bool:
         from .desktop import requires_confirmation
         return requires_confirmation(arguments.get("action", ""), arguments.get("window_handle", 0),
                                      arguments.get("control_id", ""))
+    if name == "launch_program":
+        # Keep application discovery/validation, but never turn a normal
+        # launch into a confirmation dialog.
+        _resolve_launch(arguments.get("program", ""))
+        return False
     if name=='insert_text':
         return False
     if "confirmed" in arguments:

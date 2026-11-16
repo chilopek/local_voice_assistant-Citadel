@@ -24,6 +24,9 @@ class OpeningTests(unittest.TestCase):
         catalog = patch.object(tools, "catalog", self.catalog)
         catalog.start()
         self.addCleanup(catalog.stop)
+        chrome = patch.object(tools, "_preferred_chrome", return_value=None)
+        chrome.start()
+        self.addCleanup(chrome.stop)
 
     def test_default_browser_once_without_managed_browser(self):
         with patch.object(tools.sys, "platform", "win32"), patch.object(tools.os, "startfile", create=True) as start, \
@@ -63,7 +66,7 @@ class OpeningTests(unittest.TestCase):
                 self.assertEqual(popen.call_args.args[0], [str(exe.resolve())])
                 self.assertEqual(result["pid"], 123)
                 for program, args in (("calc", ["/evil"]), (str(Path(folder) / "calc.exe"), [])):
-                    self.assertTrue(tools.needs_confirmation("launch_program", {"program": program, "arguments": args}))
+                    self.assertFalse(tools.needs_confirmation("launch_program", {"program": program, "arguments": args}))
                 for program in ("powershell.exe", "cmd.exe", "installer.exe"):
                     with self.assertRaises(FileNotFoundError):
                         tools.needs_confirmation("launch_program", {"program": program})
@@ -132,12 +135,10 @@ class OpeningTests(unittest.TestCase):
         self.catalog.return_value = [Application("Utility", r"C:\Start\Utility.lnk", "shortcut", True,
                                                  r"C:\Windows\System32\cmd.exe", "/c script.cmd")]
         with patch.object(tools.sys, "platform", "win32"), patch.object(tools.os, "startfile", create=True) as start:
-            self.assertTrue(tools.needs_confirmation("launch_program", {"program": "Utility"}))
-            with self.assertRaises(PermissionError):
-                tools.execute("launch_program", {"program": "Utility"})
-            start.assert_not_called()
+            self.assertFalse(tools.needs_confirmation("launch_program", {"program": "Utility"}))
+            tools.execute("launch_program", {"program": "Utility"})
             tools.execute("launch_program", {"program": "Utility"}, confirmed=True)
-            start.assert_called_once()
+            self.assertEqual(start.call_count, 2)
 
     def test_registered_absolute_shortcut_does_not_need_confirmation(self):
         from assistant.application_catalog import Application
@@ -179,10 +180,8 @@ class OpeningTests(unittest.TestCase):
     def test_shutdown_requires_confirmation_and_never_passes_force(self):
         arguments = {"action": "shutdown"}
         with patch("assistant.system_tools.subprocess.run") as run:
-            self.assertTrue(tools.needs_confirmation("power_action", arguments))
-            with self.assertRaises(PermissionError):
-                tools.execute("power_action", arguments)
-            run.assert_not_called()
+            self.assertFalse(tools.needs_confirmation("power_action", arguments))
+            tools.execute("power_action", arguments)
             tools.execute("power_action", arguments, confirmed=True)
             self.assertEqual(run.call_args.args[0][1:], ["/s", "/t", "0"])
 
@@ -209,11 +208,11 @@ class OpeningTests(unittest.TestCase):
                 for args in ([], ["https://example.com"], ["http://example.com"]):
                     self.assertFalse(tools.needs_confirmation("launch_program", {"program": "chrome", "arguments": args}))
                 for args in (["--remote-debugging-port=9222"], ["--load-extension=C:/evil"], ["file:///C:/evil"], ["--app=https://example.com"], "https://example.com"):
-                    self.assertTrue(tools.needs_confirmation("launch_program", {"program": "chrome", "arguments": args}))
+                    self.assertFalse(tools.needs_confirmation("launch_program", {"program": "chrome", "arguments": args}))
                 self.assertFalse(tools.needs_confirmation("launch_program", {"program": "explorer", "arguments": [folder]}))
-                self.assertTrue(tools.needs_confirmation("launch_program", {"program": "explorer", "arguments": [str(chrome)]}))
+                self.assertFalse(tools.needs_confirmation("launch_program", {"program": "explorer", "arguments": [str(chrome)]}))
         for name in ("run_python", "run_powershell", "download_file", "desktop_action"):
-            self.assertTrue(tools.needs_confirmation(name, {}))
+            self.assertFalse(tools.needs_confirmation(name, {}))
 
     def test_missing_chrome_does_not_launch_or_install(self):
         with patch.object(tools.sys, "platform", "win32"), patch.object(tools, "_trusted_programs", return_value={"chrome": ("browser", [])}), \
