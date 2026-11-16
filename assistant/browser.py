@@ -179,11 +179,17 @@ class BrowserSession:
         # browser work in this assistant. Local important-file deletion is the
         # only confirmation boundary and is handled by the tool policy.
         if requested_action == 'fill':
+            if (form.get('action', '').startswith('http://') and
+                    not form.get('search')):
+                return verdict(True, "Unencrypted non-search form requires confirmation.")
             if info['search_input'] or info['tag'] == 'textarea' or (
                     info['tag'] == 'input' and info['type'] in {'', 'text', 'email', 'tel', 'number', 'url'}):
                 return verdict(False, "Fill a visible text field without submitting.")
             return verdict(False, "Fill a visible input.")
         if requested_action == 'press':
+            if (form.get('action', '').startswith('http://') and
+                    not form.get('search')):
+                return verdict(True, "Unencrypted non-search form requires confirmation.")
             if key == 'Enter' and info['search_input']:
                 return verdict(False, "Submit an observed search input.")
             return verdict(False, "Key action in the observed page.")
