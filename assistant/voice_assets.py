@@ -18,6 +18,7 @@ from typing import Any, Callable, Mapping
 
 from .piper_voice import (PiperBackend, get_piper_path, PIPER_REPOSITORY,
                           PIPER_SUBDIRECTORY, PIPER_MODEL_NAME)
+from .paths import DATA_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,32 @@ def _complete_snapshot(path: Path) -> Path:
     return path
 
 
+def _discard_incomplete_hf_snapshot(path: Path) -> None:
+    """Remove only a broken snapshot owned by Citadel's HF cache.
+
+    ``snapshot_download`` can return a directory after an interrupted transfer.
+    Retrying against that directory may keep returning the same partial files,
+    so the installer must remove the exact snapshot before retrying. Never
+    touch an explicitly configured user directory or anything outside the
+    application's cache root.
+    """
+    cache_root = (DATA_ROOT / "cache" / "huggingface").resolve()
+    try:
+        resolved = path.resolve(strict=False)
+        relative = resolved.relative_to(cache_root)
+    except (OSError, ValueError):
+        return
+    if resolved == cache_root or len(relative.parts) < 4 or path.is_symlink():
+        return
+    if not resolved.is_dir():
+        return
+    try:
+        shutil.rmtree(resolved)
+        logger.warning("[voice:repair] removed incomplete Whisper snapshot: %s", resolved)
+    except OSError as error:
+        logger.warning("[voice:repair] could not remove incomplete Whisper snapshot %s: %s", resolved, error)
+
+
 def resolve_whisper_snapshot(model: str, allow_download: bool = False) -> Path:
     """Return a complete local snapshot, never fetching a missing local path.
 
@@ -217,7 +244,15 @@ def resolve_whisper_snapshot(model: str, allow_download: bool = False) -> Path:
             raise
     logger.info("[voice:download] Whisper %s: downloading selected Hugging Face snapshot", model)
     with _download_status(f"Whisper {model}"):
-        return _complete_snapshot(Path(download_model(model, local_files_only=False)))
+        snapshot = Path(download_model(model, local_files_only=False))
+        try:
+            return _complete_snapshot(snapshot)
+        except (OSError, ValueError):
+            _discard_incomplete_hf_snapshot(snapshot)
+            # A second download is intentional: the first online resolver may
+            # have returned the same interrupted snapshot from the HF cache.
+            repaired = Path(download_model(model, local_files_only=False))
+            return _complete_snapshot(repaired)
 
 
 def _prepare_silero_assets(stt_model: str, tts_model: str, speaker: str,
