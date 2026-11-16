@@ -24,8 +24,73 @@ class ResidentVoice:
         self.gate = WakeGate("wake")
         self.serial = 0
         self.headset = False
+        self.capture_stop = threading.Event()
+        self.capture_thread: threading.Thread | None = None
+        self.capture_mode = "wake"
+        self.speaking = False
+        self.capture_cooldown_until = 0.0
+
+    def _capture(self):
+        try:
+            return self.voice.capture_utterance(self.capture_stop, max_seconds=20)
+        except TypeError:
+            # Small test/integration adapters may expose the old one-argument API.
+            return self.voice.capture_utterance(self.capture_stop)
+
+    def _start_listener(self) -> None:
+        if self.capture_thread and self.capture_thread.is_alive():
+            return
+        self.capture_stop.clear()
+        self.capture_mode = self.gate.mode
+        self.capture_thread = threading.Thread(target=self._listen_loop, daemon=True,
+                                               name="citadel-voice-listener")
+        self.capture_thread.start()
+
+    def _stop_listener(self) -> None:
+        self.capture_stop.set()
+        thread, self.capture_thread = self.capture_thread, None
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=.7)
+
+    def _listen_loop(self) -> None:
+        """Keep STT alive while the agent is thinking or TTS is playing."""
+        while self.listening and not self.closed.is_set() and not self.capture_stop.is_set():
+            if time.monotonic() < self.capture_cooldown_until:
+                self.capture_stop.wait(.05)
+                continue
+            try:
+                self.emit("listening", {"token": self.token,
+                                         "armed": time.monotonic() < self.gate.armed_until})
+                heard = self._capture()
+                if self.capture_stop.is_set() or not self.listening:
+                    continue
+                if heard:
+                    self.emit("heard", {"token": self.token, "text": heard})
+                # While TTS is playing, require the wake word even in always mode
+                # to prevent the assistant's own voice from becoming a command.
+                gate = WakeGate("wake") if self.speaking and self.gate.mode == "always" else self.gate
+                text, armed = gate.accept(heard or "")
+                if armed:
+                    self.emit("armed", {"token": self.token})
+                if text:
+                    self.capture_cooldown_until = time.monotonic() + .35
+                    self.interrupt.set()  # interrupt speech immediately
+                    self.emit("user", {"token": self.token, "text": text})
+            except Exception as error:
+                self.emit("error", {"token": self.token, "message": str(error), "phase": "capture"})
+                return
 
     def speak(self, text: str) -> tuple[str, bool]:
+        if self.capture_thread and self.capture_thread.is_alive():
+            class PlaybackStop:
+                def is_set(inner_self):
+                    return self.interrupt.is_set()
+            self.speaking = True
+            try:
+                self.voice.speak(text, cancel_event=PlaybackStop())
+            finally:
+                self.speaking = False
+            return "", False
         if not self.headset or not self.listening:
             self.voice.speak(text, cancel_event=self.interrupt)
             return "", False
@@ -67,6 +132,7 @@ class ResidentVoice:
         if kind == "close":
             self.closed.set()
             self.interrupt.set()
+            self.capture_stop.set()
         self.commands.put(command)
 
     def prepare(self, speech: bool) -> None:
@@ -99,6 +165,7 @@ class ResidentVoice:
                 if kind == "cancel":
                     self.token = str(command.get("token", ""))
                     self.listening, self.waiting = False, False
+                    self._stop_listener()
                     self.interrupt.clear()
                     continue
                 if kind == "inspect":
@@ -120,6 +187,7 @@ class ResidentVoice:
                     self.gate = WakeGate(command["mode"])
                     self.listening, self.waiting = True, False
                     self.interrupt.clear()
+                    self._start_listener()
                 if kind in {"speak", "resume"}:
                     token = str(command.get("token", ""))
                     if self.listening and token != self.token:
@@ -127,7 +195,6 @@ class ResidentVoice:
                     self.token = token
                     self.interrupt.clear()
                     if kind == "speak":
-                        next_text, armed = "", False
                         self.emit("speaking", {"token": token})
                         try:
                             if command.get('chime'):
@@ -136,38 +203,18 @@ class ResidentVoice:
                                 self.interrupt.wait(.35)
                             if self.interrupt.is_set():
                                 continue
-                            next_text, armed = self.speak(command["text"])
+                            self.speak(command["text"])
                         except Exception as error:
                             self.emit("error", {"message": str(error), "token": token, "phase": "speech"})
                         if not self.interrupt.is_set():
                             self.emit("speech_done", {"token": token})
-                            if armed:
-                                self.gate.armed_until = time.monotonic() + self.gate.timeout
-                                self.emit("armed", {"token": token})
-                            if next_text:
-                                self.waiting = True
-                                self.emit("user", {"token": token, "text": next_text})
-                                continue
+                        else:
+                            self.emit("speech_interrupted", {"token": token})
+                            self.interrupt.clear()
                     self.waiting = False
-            if not self.listening or self.waiting or self.interrupt.is_set():
-                continue
-            token = self.token
-            try:
-                self.emit("listening", {"token": token, "armed": time.monotonic() < self.gate.armed_until})
-                heard = self.voice.capture_utterance(self.interrupt)
-                if self.interrupt.is_set():
-                    continue
-                if heard:
-                    self.emit('heard', {'token': token, 'text': heard})
-                text, armed = self.gate.accept(heard or "")
-                if armed:
-                    self.emit("armed", {"token": token})
-                if text:
-                    self.waiting = True
-                    self.emit("user", {"token": token, "text": text})
-            except Exception as error:
-                self.listening = False
-                self.emit("error", {"token": token, "message": str(error), "phase": "capture"})
+            if self.listening and not self.capture_thread:
+                self._start_listener()
+        self._stop_listener()
 
 
 def main() -> int:

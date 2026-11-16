@@ -21,7 +21,7 @@ from .uninstall import begin_uninstall
 from .personal import PersonalScheduler, PersonalStore
 from .conversations import Conversations
 
-WAKE_WORD = "цитадель"
+WAKE_WORD = "игри"
 HOTKEY = "Ctrl+Alt+C"
 MODE_LABELS = {"wake": f"После слова «{WAKE_WORD}»", "always": "Все голосовые команды"}
 BG, PANEL, SIDEBAR = "#111318", "#191c23", "#14171d"
@@ -243,7 +243,7 @@ class AssistantGUI:
                   style="Muted.TLabel", wraplength=650).pack(anchor="w", pady=(4, 0))
 
     def _welcome(self) -> None:
-        self._append_message("Citadel", "Опишите задачу обычными словами. Я помогу с браузером, файлами и приложениями Windows.\n\nДействия, требующие разрешения, появятся в окне подтверждения.")
+        self._append_message("Игри", "Опишите задачу обычными словами. Я помогу с браузером, файлами и приложениями Windows.\n\nДействия, требующие разрешения, появятся в окне подтверждения.")
         self._log_activity("Готов к работе", "Здесь появятся шаги и результаты инструментов.")
 
     def _start_hotkey(self) -> None:
@@ -315,6 +315,23 @@ class AssistantGUI:
 
     def _stop_listening(self) -> None:
         self._stop_task()
+
+    def _interrupt_for_voice_command(self) -> None:
+        """Cancel only the current task so listening can continue seamlessly."""
+        self._awaiting_speech = False
+        self._notice_speech = False
+        if not self._agent_running:
+            return
+        self.cancel_event.set()
+        self._checkpoint_interruption()
+        worker, self.worker = self.worker, None
+        self._session_id = None
+        self._agent_running = False
+        self._resolve_confirmation(False)
+        if worker:
+            worker.stop()
+        self.cancel_event = threading.Event()
+        self._log_activity("Задача прервана голосом", "Игри услышала новую команду и переключилась на неё.")
 
     def _stop_task(self) -> None:
         self._pending_listen = False
@@ -438,14 +455,16 @@ class AssistantGUI:
             self._set_mic_level(data)
         elif event == 'heard':
             self.voice_status_var.set('Распознано: ' + str(data.get('text',''))[:100])
-        elif event == "user" and self.listening and not self._agent_running:
+        elif event == "user" and self.listening:
             text = str(data["text"])
+            if self._agent_running or self._awaiting_speech:
+                self._interrupt_for_voice_command()
             self._append_message("Вы", text)
             self._start_process("task", text)
         elif event == "armed":
-            self.status_var.set("Цитадель услышана. Произнесите команду в течение 10 секунд")
+            self.status_var.set("Игри услышала. Произнесите команду в течение 10 секунд")
         elif event == "listening" and self.listening and not self._agent_running:
-            self.status_var.set("Слушаю команду…" if data.get("armed") or self._mode_key() == "always" else "Слушаю слово «цитадель»…")
+            self.status_var.set("Слушаю команду…" if data.get("armed") or self._mode_key() == "always" else "Слушаю слово «Игри»…")
         elif event == "speaking":
             self.status_var.set("Озвучиваю краткий ответ…")
         elif event == "speech_done":
@@ -533,7 +552,7 @@ class AssistantGUI:
         self.messages = self._initial_messages() + [m for m in restored if m.get('role') != 'system']
         for message in self.messages[-30:]:
             if message.get('role') in {'user', 'assistant'} and message.get('content') and not message.get('tool_calls'):
-                self._append_message('Вы' if message['role'] == 'user' else 'Citadel', str(message['content'])[:12000])
+                self._append_message('Вы' if message['role'] == 'user' else 'Игри', str(message['content'])[:12000])
         if chat['status'] in {'interrupted', 'blocked', 'partial'}:
             self._append_message('Сохранённая задача', 'Выполнение было прервано. Проверьте результат последнего действия; отправьте «продолжи», чтобы продолжить.', system=True)
         elif chat['status'] in {'waiting_input', 'waiting_auth'}:
@@ -647,7 +666,7 @@ class AssistantGUI:
                 continue
             if event == 'suggestion':
                 if self.suggestions_enabled.is_set() and not self.busy:
-                    self._append_message('Citadel · подсказка',str(payload),system=True)
+                    self._append_message('Игри · подсказка',str(payload),system=True)
                     self.messages.append({'role':'assistant','content':str(payload)})
                     if self.speak_var.get() and self._voice_ready and self._voice_speech_ready and self.voice_host:
                         self._notice_speech = self._awaiting_speech = True
@@ -688,7 +707,7 @@ class AssistantGUI:
             elif event == "assistant":
                 answer = payload.get('text','') if isinstance(payload,dict) else str(payload)
                 spoken = payload.get('speech') if isinstance(payload,dict) else None
-                self._append_message("Citadel", answer)
+                self._append_message("Игри", answer)
                 if self.speak_var.get() and self._voice_ready and self._voice_speech_ready and self.voice_host:
                     self._awaiting_speech = True
                     self.voice_host.send({"command": "speak", "token": self._voice_token, "text": spoken['text'] if isinstance(spoken,dict) else concise_speech(answer)})
@@ -754,7 +773,7 @@ class AssistantGUI:
         if self._notice_toast and self._notice_toast.winfo_exists():
             self._notice_toast.destroy()
         toast = self._notice_toast = tk.Toplevel(self.root)
-        toast.title('Цитадель · напоминание')
+        toast.title('Игри · напоминание')
         toast.configure(bg=PANEL, padx=18, pady=14)
         toast.attributes('-topmost', True)
         tk.Label(toast, text=text[:700], bg=PANEL, fg=TEXT, wraplength=360, justify='left').pack(fill='x')
@@ -880,7 +899,7 @@ class AssistantGUI:
                 self.history.set_setting("headset", self._headset)
             if self.voice_host:
                 self.voice_host.send({"command": "headset", "enabled": self._headset})
-        ttk.Checkbutton(voice_settings, text="Гарнитура · слушать «Цитадель» во время ответа",
+        ttk.Checkbutton(voice_settings, text="Гарнитура · слушать «Игри» во время ответа",
                         variable=headset, command=set_headset).pack(anchor="w", pady=(0, 8))
         ttk.Label(voice_settings,text='Распознавание речи',style='Title.TLabel').pack(anchor='w')
         ttk.Label(voice_settings,text='Base — быстрее. Small — точнее, но требует больше памяти и времени.\nМодель скачивается только при нажатии кнопки подготовки.',wraplength=650).pack(anchor='w',pady=12)
@@ -916,8 +935,8 @@ class AssistantGUI:
         ttk.Label(voice_settings,textvariable=self.voice_setup_var,wraplength=650).pack(anchor='w',pady=12)
         ttk.Label(voice_settings,text='По умолчанию: до 120 секунд, пауза до 1,2 секунды.\nДля особенно длинной диктовки можно увеличить voice_silence_seconds в настройках.',wraplength=650).pack(anchor='w')
         ttk.Label(voice_settings,text='Голос ответов',wraplength=650).pack(anchor='w',pady=(12,4))
-        profiles = {"Ксения": "xenia", "Евгений": "jarvis", "Айдар": "neutral", "Бая": "baya"}
-        profile = tk.StringVar(value={"xenia":"Ксения", "eugene":"Евгений", "aidar":"Айдар", "baya":"Бая"}.get(saved_speaker,"Ксения"))
+        profiles = {"Игри — Бая": "igri", "Ксения": "xenia", "Евгений": "jarvis", "Айдар": "neutral", "Бая": "baya"}
+        profile = tk.StringVar(value={"xenia":"Игри — Бая", "eugene":"Евгений", "aidar":"Айдар", "baya":"Игри — Бая"}.get(saved_speaker,"Игри — Бая"))
         ttk.Combobox(voice_settings,textvariable=profile,values=tuple(profiles),state='readonly').pack(anchor='w')
         def prepare_voice():
             if self._voice_setup and not self._voice_setup.stopped.is_set() and (self._voice_setup.process is None or self._voice_setup.process.poll() is None):

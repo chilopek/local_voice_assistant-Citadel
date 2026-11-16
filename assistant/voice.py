@@ -410,7 +410,7 @@ class VoiceSession:
                                            vad_parameters={"min_silence_duration_ms": 600, "speech_pad_ms": 400},
                                            multilingual=language is None,
                                            condition_on_previous_text=language is not None,
-                                           hotwords="Цитадель, Citadel, Valorant, Discord, Steam, YouTube")
+                                           hotwords="Игри, Игрэ, Цитадель, Citadel, Valorant, Discord, Steam, YouTube")
             parts = []
             for segment in segments:
                 if stop_event is not None and stop_event.is_set():

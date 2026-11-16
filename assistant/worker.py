@@ -26,11 +26,13 @@ class WakeGate:
             return "", False
         if self.mode == "always":
             return text, False
-        match = re.match(r"^(?:(?:эй|слушай|привет|пожалуйста|hey|hi)\s*[,!]?\s+)?(?:цитадель|citadel)\b", text, re.I)
+        # «Игри» is the public wake word. The old word remains a silent
+        # compatibility alias for already installed users and old recordings.
+        match = re.match(r"^(?:(?:эй|слушай|привет|пожалуйста|hey|hi)\s*[,!]?\s+)?(?:игри|игрэ|igri|цитадель|citadel)\b", text, re.I)
         if not match:
             # Limited ASR spellings only at the start of an address. Never fuzzy
             # match arbitrary conversation ("цитата", "читатель", "цитадельная").
-            match = re.match(r"^(?:(?:эй|слушай|привет)\s*[,!]?\s+)?(?:ситадель|цитадел|цитадели|цита[ -]дель|сита[ -]дель)\b", text, re.I)
+            match = re.match(r"^(?:(?:эй|слушай|привет)\s*[,!]?\s+)?(?:игра|игри|игрэ|ситадель|цитадел|цитадели|цита[ -]дель|сита[ -]дель)\b", text, re.I)
         if match:
             command = text[match.end():].lstrip(" ,.!?:;—-")
             self.armed_until = 0 if command else now + self.timeout
@@ -146,13 +148,13 @@ def main() -> int:
                     gate = WakeGate(payload["mode"])
                     voice.prepare(speech=speech["enabled"])
                     while not cancel.is_set():
-                        emit("status", "Слушаю команду…" if gate.mode == "always" or time.monotonic() < gate.armed_until else "Слушаю слово «цитадель»…")
+                        emit("status", "Слушаю команду…" if gate.mode == "always" or time.monotonic() < gate.armed_until else "Слушаю слово «Игри»…")
                         heard = voice.capture_utterance(cancel)
                         if cancel.is_set():
                             break
                         command, armed = gate.accept(heard)
                         if armed:
-                            emit("status", "Цитадель услышана. Произнесите команду в течение 10 секунд")
+                            emit("status", "Игри услышала. Произнесите команду в течение 10 секунд")
                         if command:
                             emit("user", command)
                             try:

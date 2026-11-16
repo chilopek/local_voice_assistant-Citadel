@@ -33,6 +33,11 @@ class WakeTests(unittest.TestCase):
         self.assertEqual(gate.accept("слишком поздно", 17), ("", False))
         self.assertEqual(gate.accept("цитадельная", 18), ("", False))
 
+    def test_igri_is_the_public_wake_word(self):
+        gate = WakeGate("wake")
+        self.assertEqual(gate.accept("Игри, открой браузер", 1), ("открой браузер", False))
+        self.assertEqual(gate.accept("Игрэ", 2), ("", True))
+
     def test_always_accepts_without_wake_word(self):
         self.assertEqual(WakeGate("always").accept("найди информацию про SSH"), ("найди информацию про SSH", False))
 

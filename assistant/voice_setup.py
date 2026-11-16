@@ -6,7 +6,7 @@ import tempfile
 
 from .paths import DATA_ROOT
 
-VOICE_PROFILES = {"xenia": "xenia", "jarvis": "eugene", "neutral": "aidar", "baya": "baya"}
+VOICE_PROFILES = {"igri": "baya", "xenia": "xenia", "jarvis": "eugene", "neutral": "aidar", "baya": "baya"}
 
 
 def save_updates(updates):
@@ -25,7 +25,7 @@ def save_updates(updates):
 
 def prepare_profile(profile,emit):
     if profile not in VOICE_PROFILES:
-        raise ValueError('Выберите один из голосов Цитадели.')
+        raise ValueError('Выберите один из голосов Игри.')
     from .voice import VoiceSession
     from .voice_assets import _validate_audio
     speaker = VOICE_PROFILES[profile]

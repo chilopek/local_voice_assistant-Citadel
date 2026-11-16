@@ -48,6 +48,43 @@ class VoiceHostTests(unittest.TestCase):
         self.assertEqual(service.speak("Тест озвучки"), ("закрой окно", False))
         self.assertTrue(voice.interrupted)
 
+    def test_listener_can_interrupt_speech_without_headset_mode(self):
+        capture_started = threading.Event()
+        release_capture = threading.Event()
+        speaking = threading.Event()
+
+        class Voice:
+            def prepare(self, speech=False):
+                pass
+
+            def capture_utterance(self, stop, max_seconds=20):
+                capture_started.set()
+                release_capture.wait(2)
+                return "Игри, остановись"
+
+            def speak(self, text, cancel_event=None):
+                speaking.set()
+                while not cancel_event.is_set():
+                    time.sleep(.01)
+
+        events = []
+        service = ResidentVoice(Voice(), lambda event, data: events.append((event, data)))
+        thread = threading.Thread(target=service.run, args=(True,), daemon=True)
+        thread.start()
+        try:
+            self.wait(lambda: any(event == "ready" for event, _ in events))
+            service.submit({"command": "listen", "token": "one", "mode": "wake"})
+            self.wait(capture_started.is_set)
+            service.submit({"command": "speak", "token": "one", "text": "Ответ"})
+            self.wait(speaking.is_set)
+            release_capture.set()
+            self.wait(lambda: any(event == "user" and data["text"] == "остановись" for event, data in events))
+            self.wait(lambda: any(event == "speech_interrupted" for event, _ in events))
+        finally:
+            service.submit({"command": "close"})
+            thread.join(timeout=3)
+        self.assertFalse(thread.is_alive())
+
     def wait(self, predicate):
         deadline = time.monotonic() + 3
         while not predicate() and time.monotonic() < deadline:
