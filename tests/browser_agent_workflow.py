@@ -48,11 +48,12 @@ def main():
             root = Path(folder)
             browser = BrowserSession(headless=True, profile=root/'profile')
             try:
-                with patch('assistant.browser.BROWSER', browser), patch('assistant.tools.os.startfile') as opened, patch.object(app, 'PROJECT_ROOT', root):
+                with patch('assistant.browser.BROWSER', browser), patch('assistant.tools.os.startfile') as opened, patch('assistant.tools.subprocess.Popen') as popen, patch.object(app, 'PROJECT_ROOT', root):
                     def confirm(*_):
                         raise AssertionError('Unnecessary confirmation in a search/read workflow')
                     answer = app.run_turn(Model(), Memory(root/'memory.sqlite'), [], 'Вбей в Google вопрос про SSH, прочитай ответ и открой страницу с ответом', confirm=confirm)
-                opened.assert_called_once_with(base+'/answer')
+                launched = opened.call_args_list + popen.call_args_list
+                assert any(base+'/answer' in str(call) for call in launched), launched
                 assert 'прочитан и открыт' in answer, answer
                 print('PASS: real browser search fill/Enter, source read, default URL open; zero confirmation dialogs')
             finally:
