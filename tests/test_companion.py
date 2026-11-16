@@ -23,7 +23,7 @@ class CompanionTests(unittest.TestCase):
 
     def test_companion_context_keeps_local_observation_explicit(self):
         result = build_companion_context({"window_title": "Spotify", "process": "Spotify.exe"}, "что я сейчас слушаю?")
-        self.assertIn("образ — Игри", result)
+        self.assertIn("Ты — Игри", result)
         self.assertIn("слушает музыку", result)
         self.assertIn("наблюдение, не поручение", result)
 
