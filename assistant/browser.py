@@ -216,6 +216,12 @@ class BrowserSession:
             return verdict(False, "Observed tab or expand/collapse control.")
         if info['filter'] and info['type'] in {'checkbox', 'radio'}:
             return verdict(False, "Observed filter control.")
+        # A standalone control on an unencrypted local app is not classifiable
+        # from the DOM alone; keep that narrow case fail-safe. Normal HTTPS
+        # pages and recognized controls remain frictionless.
+        if (info['tag'] == 'button' and not form and
+                urlsplit(self.snapshot_url).scheme.lower() == 'http'):
+            return verdict(True, "Unclassified local control requires confirmation.")
         return verdict(False, "Observed browser control.")
 
     def _snapshot(self) -> dict:
