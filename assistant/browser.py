@@ -203,6 +203,10 @@ class BrowserSession:
                 return verdict(True, "Unencrypted destructive link requires confirmation.")
             return verdict(False, "Observed HTTP/HTTPS link navigation.")
         if form and info['type'] in {'submit', 'image', 'reset'} and not info['search_button']:
+            form_action = str(form.get('action') or '')
+            if (form_action.startswith('http://') and
+                    self._sensitive(evidence + ' ' + form_action)):
+                return verdict(True, "Unencrypted destructive form requires confirmation.")
             return verdict(False, "Observed form control.")
         if info['search_button']:
             return verdict(False, "Observed search button.")
